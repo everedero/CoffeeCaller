@@ -8,6 +8,8 @@ manifest:
       url-base: https://github.com/zephyrproject-rtos
     - name: tiacsys
       url-base: https://github.com/tiacsys
+    - name: everedero
+      url-base: https://github.com/everedero
 
   projects:
     - name: zephyr
@@ -26,6 +28,6 @@ manifest:
           - openthread
           - lvgl
     - name: bridle
-      remote: tiacsys
-      revision: v4.2.1
+      remote: everedero
+      revision: eve/ftdi2232
       clone-depth: 0
