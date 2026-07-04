@@ -31,6 +31,7 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ventilation.h"
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
@@ -39,7 +40,8 @@ LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 #define RUN_STATUS_LED          DK_LED1
 #define ZIGBEE_NETWORK_LED      DK_LED3
 #define IDENTIFY_LED            DK_LED4
-#define NETWORK_REOPEN_BUTTON   DK_BTN1_MSK
+#define VENT_BUTTON             DK_BTN1_MSK
+#define NETWORK_REOPEN_BUTTON   DK_BTN2_MSK
 #define FACTORY_RESET_BUTTON    DK_BTN4_MSK
 
 /* --- Zigbee endpoint ------------------------------------------------------- */
@@ -388,6 +390,7 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 			temp_raw[ess] = *((int16_t *)rep->attr_value);
 			LOG_INF("Temperature: %d.%02d C (slot=%d)",
 				temp_raw[ess] / 100, abs(temp_raw[ess] % 100), ess);
+			ventilation_update_temp(ess, temp_raw[ess]);
 			if (temp_notify_enabled[ess]) {
 				int16_t t = sys_cpu_to_le16(temp_raw[ess]);
 
@@ -538,6 +541,10 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 {
 	uint32_t buttons = button_state & has_changed;
 	zb_bool_t comm_status;
+
+	if ((has_changed & VENT_BUTTON) && (button_state & VENT_BUTTON)) {
+		ventilation_toggle();
+	}
 
 	if (buttons & NETWORK_REOPEN_BUTTON) {
 		(void)ZB_SCHEDULE_APP_ALARM_CANCEL(steering_finished,
@@ -730,6 +737,7 @@ int main(void)
 		LOG_ERR("dk_leds_init failed (%d)", err);
 	}
 	register_factory_reset_button(FACTORY_RESET_BUTTON);
+	ventilation_init();
 
 	/* Zigbee */
 	ZB_AF_REGISTER_DEVICE_CTX(&coord_device);
