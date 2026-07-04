@@ -127,67 +127,106 @@ ZBOSS_DECLARE_DEVICE_CTX_1_EP(coord_device, coord_ep);
 /* --- BLE ESS shared state -------------------------------------------------- */
 
 /*
+ * MAX_ESS_SENSORS characteristic pairs in the ESS service — one per Zigbee
+ * sensor slot.  Slot s → temperature at attrs[ESS_TEMP_ATTR_IDX(s)],
+ * humidity at attrs[ESS_HUM_ATTR_IDX(s)].
+ * Slots ≥ MAX_ESS_SENSORS are clamped to MAX_ESS_SENSORS-1 (last pair).
+ */
+#define MAX_ESS_SENSORS 2
+#define ESS_TEMP_ATTR_IDX(s)  (2 + (s) * 8)
+#define ESS_HUM_ATTR_IDX(s)   (6 + (s) * 8)
+
+/*
  * Written from the ZBOSS callback thread, read from BLE GATT read callbacks.
  * int16_t and uint16_t writes are atomic on Cortex-M4 for aligned accesses,
  * but we use a mutex to also protect the notify flags.
  */
 static K_MUTEX_DEFINE(sensor_lock);
-static int16_t  temp_raw;  /* 0.01 °C, sint16 per ESS spec */
-static uint16_t hum_raw;   /* 0.01 %,  uint16 per ESS spec */
+static int16_t  temp_raw[MAX_ESS_SENSORS];  /* 0.01 °C, sint16 per ESS spec */
+static uint16_t hum_raw[MAX_ESS_SENSORS];   /* 0.01 %,  uint16 per ESS spec */
 
-static bool temp_notify_enabled;
-static bool hum_notify_enabled;
+static bool temp_notify_enabled[MAX_ESS_SENSORS];
+static bool hum_notify_enabled[MAX_ESS_SENSORS];
 
 /* --- BLE ESS GATT service -------------------------------------------------- */
 
-static ssize_t read_temp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			 void *buf, uint16_t len, uint16_t offset)
-{
-	int16_t val = sys_cpu_to_le16(temp_raw);
-
-	return bt_gatt_attr_read(conn, attr, buf, len, offset, &val, sizeof(val));
-}
-
-static void temp_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
-{
-	temp_notify_enabled = (value == BT_GATT_CCC_NOTIFY);
-}
-
-static ssize_t read_hum(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+/* Single read_s16/read_u16 handles all instances via attr->user_data */
+static ssize_t read_s16(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 			void *buf, uint16_t len, uint16_t offset)
 {
-	uint16_t val = sys_cpu_to_le16(hum_raw);
+	int16_t val = sys_cpu_to_le16(*(int16_t *)attr->user_data);
 
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, &val, sizeof(val));
 }
 
-static void hum_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
+static ssize_t read_u16(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+			void *buf, uint16_t len, uint16_t offset)
 {
-	hum_notify_enabled = (value == BT_GATT_CCC_NOTIFY);
+	uint16_t val = sys_cpu_to_le16(*(uint16_t *)attr->user_data);
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &val, sizeof(val));
+}
+
+static void temp_ccc_changed_0(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	temp_notify_enabled[0] = (value == BT_GATT_CCC_NOTIFY);
+}
+
+static void temp_ccc_changed_1(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	temp_notify_enabled[1] = (value == BT_GATT_CCC_NOTIFY);
+}
+
+static void hum_ccc_changed_0(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	hum_notify_enabled[0] = (value == BT_GATT_CCC_NOTIFY);
+}
+
+static void hum_ccc_changed_1(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	hum_notify_enabled[1] = (value == BT_GATT_CCC_NOTIFY);
 }
 
 /*
- * ESS attribute map:
- *   [0] Primary service (ESS 0x181A)
- *   [1] Temperature char declaration
- *   [2] Temperature char value        <- bt_gatt_notify target
- *   [3] Temperature CCC
- *   [4] Humidity char declaration
- *   [5] Humidity char value           <- bt_gatt_notify target
- *   [6] Humidity CCC
+ * ESS attribute map (BT_GATT_CHARACTERISTIC = 2 attrs; each descriptor = 1):
+ *   [0]  Primary service (ESS 0x181A)
+ *   Sensor 0:
+ *   [1][2]  Temp decl+value  [3] CCC  [4] CUD "Sensor 1"
+ *   [5][6]  Hum  decl+value  [7] CCC  [8] CUD "Sensor 1"
+ *   Sensor 1:
+ *   [9][10] Temp decl+value [11] CCC [12] CUD "Sensor 2"
+ *  [13][14] Hum  decl+value [15] CCC [16] CUD "Sensor 2"
+ *
+ *  Notify targets: ESS_TEMP_ATTR_IDX(s) = 2+s*8, ESS_HUM_ATTR_IDX(s) = 6+s*8
  */
 BT_GATT_SERVICE_DEFINE(ess_svc,
 	BT_GATT_PRIMARY_SERVICE(BT_UUID_ESS),
+	/* Sensor slot 0 */
 	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE,
 			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
 			       BT_GATT_PERM_READ,
-			       read_temp, NULL, &temp_raw),
-	BT_GATT_CCC(temp_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+			       read_s16, NULL, &temp_raw[0]),
+	BT_GATT_CCC(temp_ccc_changed_0, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+	BT_GATT_CUD("Sensor 1", BT_GATT_PERM_READ),
 	BT_GATT_CHARACTERISTIC(BT_UUID_HUMIDITY,
 			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
 			       BT_GATT_PERM_READ,
-			       read_hum, NULL, &hum_raw),
-	BT_GATT_CCC(hum_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+			       read_u16, NULL, &hum_raw[0]),
+	BT_GATT_CCC(hum_ccc_changed_0, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+	BT_GATT_CUD("Sensor 1", BT_GATT_PERM_READ),
+	/* Sensor slot 1 */
+	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE,
+			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+			       BT_GATT_PERM_READ,
+			       read_s16, NULL, &temp_raw[1]),
+	BT_GATT_CCC(temp_ccc_changed_1, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+	BT_GATT_CUD("Sensor 2", BT_GATT_PERM_READ),
+	BT_GATT_CHARACTERISTIC(BT_UUID_HUMIDITY,
+			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+			       BT_GATT_PERM_READ,
+			       read_u16, NULL, &hum_raw[1]),
+	BT_GATT_CCC(hum_ccc_changed_1, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+	BT_GATT_CUD("Sensor 2", BT_GATT_PERM_READ),
 );
 
 static const struct bt_data ad[] = {
@@ -317,25 +356,22 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 		hdr->cmd_direction);
 	LOG_HEXDUMP_DBG(zb_buf_begin(bufid), MIN(zb_buf_len(bufid), 32U), "ZCL payload");
 
-	/* Any ZCL frame from this sensor: cancel retry; register if unknown */
-	{
-		zb_uint16_t src = hdr->addr_data.common_data.source.u.short_addr;
-		int _idx = sensor_find(src);
+	/* Any ZCL frame: cancel retry; register if unknown.
+	 * slot/ess stay in function scope so the reporting loop below can use them. */
+	zb_uint16_t src = hdr->addr_data.common_data.source.u.short_addr;
+	int slot = sensor_find(src);
 
-		if (_idx >= 0) {
-			(void)ZB_SCHEDULE_APP_ALARM_CANCEL(retry_cr_alarm,
-							   (zb_uint8_t)_idx);
-		} else {
-			/* Already reporting without rejoining (e.g. after coordinator
-			 * reflash) — register it so the table stays consistent */
-			int _new = sensor_alloc(src);
-
-			if (_new >= 0) {
-				LOG_INF("Registered existing sensor 0x%04x from ZCL report",
-					src);
-			}
+	if (slot >= 0) {
+		(void)ZB_SCHEDULE_APP_ALARM_CANCEL(retry_cr_alarm, (zb_uint8_t)slot);
+	} else {
+		/* Already reporting without rejoining (e.g. after coordinator
+		 * reflash) — register it so the table stays consistent */
+		slot = sensor_alloc(src);
+		if (slot >= 0) {
+			LOG_INF("Registered existing sensor 0x%04x from ZCL report", src);
 		}
 	}
+	int ess = (slot >= 0 && slot < MAX_ESS_SENSORS) ? slot : (MAX_ESS_SENSORS - 1);
 
 	if (hdr->cmd_id != ZB_ZCL_CMD_REPORT_ATTRIB) {
 		return ZB_FALSE;
@@ -349,26 +385,26 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 
 		if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
 		    rep->attr_id == ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID) {
-			temp_raw = *((int16_t *)rep->attr_value);
-			LOG_INF("Temperature: %d.%02d C (src=0x%04x)",
-				temp_raw / 100, abs(temp_raw % 100),
-				hdr->addr_data.common_data.source.u.short_addr);
-			if (temp_notify_enabled) {
-				int16_t t = sys_cpu_to_le16(temp_raw);
+			temp_raw[ess] = *((int16_t *)rep->attr_value);
+			LOG_INF("Temperature: %d.%02d C (slot=%d)",
+				temp_raw[ess] / 100, abs(temp_raw[ess] % 100), ess);
+			if (temp_notify_enabled[ess]) {
+				int16_t t = sys_cpu_to_le16(temp_raw[ess]);
 
-				bt_gatt_notify(NULL, &ess_svc.attrs[2],
+				bt_gatt_notify(NULL,
+					       &ess_svc.attrs[ESS_TEMP_ATTR_IDX(ess)],
 					       &t, sizeof(t));
 			}
 		} else if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT &&
 			   rep->attr_id == ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID) {
-			hum_raw = *((uint16_t *)rep->attr_value);
-			LOG_INF("Humidity: %d.%02d %% (src=0x%04x)",
-				hum_raw / 100, hum_raw % 100,
-				hdr->addr_data.common_data.source.u.short_addr);
-			if (hum_notify_enabled) {
-				uint16_t h = sys_cpu_to_le16(hum_raw);
+			hum_raw[ess] = *((uint16_t *)rep->attr_value);
+			LOG_INF("Humidity: %d.%02d %% (slot=%d)",
+				hum_raw[ess] / 100, hum_raw[ess] % 100, ess);
+			if (hum_notify_enabled[ess]) {
+				uint16_t h = sys_cpu_to_le16(hum_raw[ess]);
 
-				bt_gatt_notify(NULL, &ess_svc.attrs[5],
+				bt_gatt_notify(NULL,
+					       &ess_svc.attrs[ESS_HUM_ATTR_IDX(ess)],
 					       &h, sizeof(h));
 			}
 		}
