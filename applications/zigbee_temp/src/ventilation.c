@@ -80,8 +80,8 @@ static void sample_work_fn(struct k_work *w)
 	bool    both_valid;
 
 	k_mutex_lock(&v_lock, K_FOREVER);
-	inside     = v_temp[1];
-	outside    = v_temp[0];
+	inside     = v_temp[0];
+	outside    = v_temp[1];
 	both_valid = v_temp_valid[0] && v_temp_valid[1];
 	k_mutex_unlock(&v_lock);
 
