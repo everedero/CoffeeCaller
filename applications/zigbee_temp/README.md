@@ -64,8 +64,11 @@ If flashing fails, check that the OpenOCD config uses `ftdi` as the interface (n
 The board acts as a Zigbee coordinator. It opens the network on boot and keeps it open for
 3 minutes.
 
-Sensors are assigned slots in join order: the first sensor to pair is "Sensor 1"
-(inside), the second is "Sensor 2" (outside).
+Each sensor is pinned to a fixed slot by its IEEE (MAC) address (see `known_sensors` in
+`src/main.c`), rather than by join order — so "Sensor 1" (inside) and "Sensor 2" (outside) stay
+consistent across reboots regardless of which sensor happens to (re)join first. If a sensor is
+replaced, read its new IEEE address off the serial console's `MAC: xx:xx:...` log line (printed
+on join/rejoin) and update `known_sensors` accordingly.
 
 ### Standard pairing
 
