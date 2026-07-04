@@ -1,33 +1,31 @@
 # SPDX-FileCopyrightText: 2025 Alicipy <dev@stefankraus.org>
 #
 # SPDX-License-Identifier: Apache-2.0
+#
+# Standalone manifest for CoffeeCaller using NCS v2.8.0.
+# NCS v2.8.0 is the last release that includes Zigbee (ZBOSS in nrfxlib).
+#
+# Usage (fresh workspace):
+#   west init -m https://github.com/everedero/CoffeeCaller
+#   west update
+#
+# Usage (existing NCS v2.8.0 workspace at /home/eve/ncs/v2.8.0/):
+#   cd /home/eve/ncs/v2.8.0
+#   west build -b coffeecaller_nrf52/nrf52840 \
+#     /home/eve/ncs/CoffeeCaller/applications/zigbee_temp \
+#     -p always -- -DZEPHYR_EXTRA_MODULES=/home/eve/ncs/CoffeeCaller
 
 manifest:
   remotes:
-    - name: zephyrproject-rtos
-      url-base: https://github.com/zephyrproject-rtos
-    - name: tiacsys
-      url-base: https://github.com/tiacsys
-    - name: everedero
-      url-base: https://github.com/everedero
+    - name: nrfconnect
+      url-base: https://github.com/nrfconnect
 
   projects:
-    - name: zephyr
-      remote: zephyrproject-rtos
-      revision: v4.2.0
-      clone-depth: 1
-      import:
-        name-allowlist:
-          - cmsis_6
-          - hal_st # for ST sensors
-          - hal_nordic
-          - libmetal
-          - mbedtls
-          - mcuboot
-          - open-amp
-          - openthread
-          - lvgl
-    - name: bridle
-      remote: everedero
-      revision: eve/ftdi2232
-      clone-depth: 0
+    - name: sdk-nrf
+      remote: nrfconnect
+      revision: v2.8.0
+      path: nrf
+      import: true   # pulls zephyr, nrfxlib (ZBOSS), mcuboot, openthread, etc.
+
+  self:
+    path: CoffeeCaller

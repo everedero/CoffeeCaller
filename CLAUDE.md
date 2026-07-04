@@ -2,7 +2,23 @@
 
 ## Build board
 
+### temp_ble (BLE ESS with onboard SHT4x) — NCS v3.2.1 workspace
+
+```bash
+# From /home/eve/ncs/
 west build -b coffeecaller_nrf52/nrf52840 ./CoffeeCaller/applications/temp_ble -p always
+```
+
+### zigbee_temp (Zigbee coordinator + BLE ESS gateway) — NCS v2.8.0 workspace
+
+NCS v2.8.0 is the last NCS release with the ZBOSS Zigbee stack (nrfxlib).
+
+```bash
+cd /home/eve/ncs/v2.8.0
+west build -b coffeecaller_nrf52/nrf52840 \
+  /home/eve/ncs/CoffeeCaller/applications/zigbee_temp \
+  -p always -- -DZEPHYR_EXTRA_MODULES=/home/eve/ncs/CoffeeCaller
+```
 
 ## Check board presence
 

@@ -1,0 +1,5 @@
+board:
+  name: coffeecaller_nrf52
+  vendor: tiac
+  socs:
+    - name: nrf52840
