@@ -42,6 +42,7 @@ LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 #define IDENTIFY_LED            DK_LED4
 #define VENT_BUTTON             DK_BTN1_MSK
 #define NETWORK_REOPEN_BUTTON   DK_BTN2_MSK
+#define VENT_TEST_BUTTON        DK_BTN3_MSK
 #define FACTORY_RESET_BUTTON    DK_BTN4_MSK
 
 /* --- Zigbee endpoint ------------------------------------------------------- */
@@ -544,6 +545,10 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 
 	if ((has_changed & VENT_BUTTON) && (button_state & VENT_BUTTON)) {
 		ventilation_toggle();
+	}
+
+	if ((has_changed & VENT_TEST_BUTTON) && (button_state & VENT_TEST_BUTTON)) {
+		ventilation_buzz_test();
 	}
 
 	if (buttons & NETWORK_REOPEN_BUTTON) {

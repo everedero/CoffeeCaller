@@ -67,7 +67,7 @@ The board acts as a Zigbee coordinator. It opens the network on boot and keeps i
 3 minutes.
 
 Sensors are assigned slots in join order: the first sensor to pair is "Sensor 1"
-(outside), the second is "Sensor 2" (inside).
+(inside), the second is "Sensor 2" (outside).
 
 ### Standard pairing
 
@@ -120,7 +120,7 @@ Values update whenever the sensor reports (every 10–300 s or on >=0.5 °C / >=
 
 Press SW0 to enable. The first RGB LED turns red.
 
-The board monitors the difference between indoor (Sensor 2) and outdoor (Sensor 1)
+The board monitors the difference between indoor (Sensor 1) and outdoor (Sensor 2)
 temperatures. Every 60 seconds a sample is taken; the alarm triggers when:
 
 - The 20-minute rolling average of (inside - outside) > 2 °C, and

@@ -29,7 +29,7 @@ static struct led_rgb pixels[STRIP_NUM_LEDS];
 /* --- State ------------------------------------------------------------------ */
 
 static K_MUTEX_DEFINE(v_lock);
-static int16_t v_temp[2];       /* centidegrees; slot 0=outside, 1=inside */
+static int16_t v_temp[2];       /* centidegrees; slot 0=inside, 1=outside */
 static bool    v_temp_valid[2]; /* true once the slot has received at least one report */
 
 #define SAMPLE_PERIOD_S 60
@@ -81,8 +81,8 @@ static void sample_work_fn(struct k_work *w)
 	bool    both_valid;
 
 	k_mutex_lock(&v_lock, K_FOREVER);
-	inside     = v_temp[1];
-	outside    = v_temp[0];
+	inside     = v_temp[0];
+	outside    = v_temp[1];
 	both_valid = v_temp_valid[0] && v_temp_valid[1];
 	k_mutex_unlock(&v_lock);
 
@@ -185,4 +185,11 @@ void ventilation_toggle(void)
 bool ventilation_is_enabled(void)
 {
 	return vent_enabled;
+}
+
+void ventilation_buzz_test(void)
+{
+	LOG_INF("Buzzer test");
+	buzzer_on();
+	k_work_schedule(&buzz_stop_work, K_SECONDS(1));
 }
