@@ -1,10 +1,9 @@
 /*
- * SPDX-FileCopyrightText: 2025 Alicipy <dev@stefankraus.org>
  * SPDX-License-Identifier: Apache-2.0
  *
  * Ventilation alarm: buzzes when inside temperature is warmer than outside by
  * more than 2°C (20-minute rolling average), inside > 25°C, at most once/hour.
- * Slot 0 = outside sensor, slot 1 = inside sensor.
+ * Slot 1 = outside sensor, slot 0 = inside sensor.
  */
 
 #include "ventilation.h"
@@ -81,8 +80,8 @@ static void sample_work_fn(struct k_work *w)
 	bool    both_valid;
 
 	k_mutex_lock(&v_lock, K_FOREVER);
-	inside     = v_temp[0];
-	outside    = v_temp[1];
+	inside     = v_temp[1];
+	outside    = v_temp[0];
 	both_valid = v_temp_valid[0] && v_temp_valid[1];
 	k_mutex_unlock(&v_lock);
 
@@ -130,7 +129,7 @@ static void sample_work_fn(struct k_work *w)
 	LOG_INF("vent: BUZZ triggered (inside=%d avg_diff=%d)", inside, avg_diff);
 	last_buzz_uptime_ms = k_uptime_get();
 	buzzer_on();
-	k_work_schedule(&buzz_stop_work, K_SECONDS(3));
+	k_work_schedule(&buzz_stop_work, K_SECONDS(10));
 }
 
 static void sample_timer_fn(struct k_timer *t)

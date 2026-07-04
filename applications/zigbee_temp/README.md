@@ -27,10 +27,8 @@ SWD resistor hack, as a flashing probe.
 Requires the NCS v2.8.0 workspace (last release that includes ZBOSS/Zigbee).
 
 ```bash
-cd ./ncs
-west build -b coffeecaller_nrf52/nrf52840 \
-  CoffeeCaller/applications/zigbee_temp \
-  -p always -- -DZEPHYR_EXTRA_MODULES=CoffeeCaller
+cd ./ncs/v2.8.0
+west build -b coffeecaller_nrf52/nrf52840 ../CoffeeCaller/applications/zigbee_temp -p always -- -DZEPHYR_EXTRA_MODULES="$(realpath ../CoffeeCaller)"
 ```
 
 ---
@@ -127,7 +125,7 @@ temperatures. Every 60 seconds a sample is taken; the alarm triggers when:
 - Inside temperature > 25 °C, and
 - The alarm has not triggered in the last hour.
 
-When triggered, the buzzer sounds for 3 seconds. Press SW0 again to disable.
+When triggered, the buzzer sounds for 10 seconds. Press SW0 again to disable.
 
 The 20-minute warm-up window means the alarm will not fire until at least 20 samples have
 been collected after boot.
