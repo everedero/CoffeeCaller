@@ -276,6 +276,34 @@ static zb_uint16_t    cr_pending_addr;
 static zb_int16_t     temp_rep_change = 50;   /* 0.5 °C in 0.01 °C units */
 static zb_uint16_t    hum_rep_change  = 100;  /* 1.0 % in 0.01 % units */
 
+/*
+ * Fixed sensor identity -> slot mapping (0 = inside, 1 = outside), so the
+ * inside/outside assignment no longer depends on which sensor happens to
+ * (re)join first after boot. ieee_addr is in p->long_addr index order
+ * [0..7], which is the reverse of the human-readable "MAC: xx:xx:..." log
+ * output (that log prints long_addr[7..0]).
+ */
+static const struct {
+	zb_uint8_t ieee_addr[8];
+	int        slot;
+} known_sensors[] = {
+	{ { 0x16, 0xbf, 0x68, 0xfe, 0xff, 0x0a, 0x69, 0x18 }, 0 }, /* inside:  18:69:0a:ff:fe:68:bf:16 */
+	{ { 0x87, 0x0c, 0xa5, 0xfe, 0xff, 0x7e, 0xd0, 0x70 }, 1 }, /* outside: 70:d0:7e:ff:fe:a5:0c:87 */
+};
+
+static int slot_for_ieee(const zb_uint8_t *ieee)
+{
+	if (ieee == NULL) {
+		return -1;
+	}
+	for (size_t i = 0; i < ARRAY_SIZE(known_sensors); i++) {
+		if (memcmp(known_sensors[i].ieee_addr, ieee, 8) == 0) {
+			return known_sensors[i].slot;
+		}
+	}
+	return -1;
+}
+
 static int sensor_find(zb_uint16_t addr)
 {
 	for (int i = 0; i < MAX_SENSORS; i++) {
@@ -286,13 +314,26 @@ static int sensor_find(zb_uint16_t addr)
 	return -1;
 }
 
-static int sensor_alloc(zb_uint16_t addr)
+static int sensor_alloc(zb_uint16_t addr, const zb_uint8_t *ieee)
 {
 	int slot = sensor_find(addr);
 
 	if (slot >= 0) {
 		return slot;
 	}
+
+	int fixed_slot = slot_for_ieee(ieee);
+
+	if (fixed_slot >= 0 && !sensors[fixed_slot].active) {
+		sensors[fixed_slot].short_addr = addr;
+		sensors[fixed_slot].active = true;
+		return fixed_slot;
+	}
+
+	if (fixed_slot < 0) {
+		LOG_WRN("Unknown sensor IEEE for short=0x%04x, falling back to join-order slot", addr);
+	}
+
 	for (int i = 0; i < MAX_SENSORS; i++) {
 		if (!sensors[i].active) {
 			sensors[i].short_addr = addr;
@@ -369,7 +410,7 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 	} else {
 		/* Already reporting without rejoining (e.g. after coordinator
 		 * reflash) — register it so the table stays consistent */
-		slot = sensor_alloc(src);
+		slot = sensor_alloc(src, addr_cache_lookup(src));
 		if (slot >= 0) {
 			LOG_INF("Registered existing sensor 0x%04x from ZCL report", src);
 		}
@@ -677,7 +718,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 				}
 			}
 
-			int slot = sensor_alloc(p->short_addr);
+			int slot = sensor_alloc(p->short_addr, new_ieee);
 
 			if (slot < 0) {
 				LOG_WRN("Sensor table full, ignoring 0x%04x",
