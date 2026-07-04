@@ -66,9 +66,29 @@ The board acts as a Zigbee coordinator. It opens the network on boot and keeps i
 
 Each sensor is pinned to a fixed slot by its IEEE (MAC) address (see `known_sensors` in
 `src/main.c`), rather than by join order — so "Sensor 1" (inside) and "Sensor 2" (outside) stay
-consistent across reboots regardless of which sensor happens to (re)join first. If a sensor is
-replaced, read its new IEEE address off the serial console's `MAC: xx:xx:...` log line (printed
-on join/rejoin) and update `known_sensors` accordingly.
+consistent across reboots regardless of which sensor happens to (re)join first.
+
+### Finding a sensor's MAC address to hard-code
+
+When pairing a new or replacement sensor, its IEEE address isn't known ahead of time, retrieve
+it from the coordinator's serial console:
+
+1. Connect: `screen /dev/ttyACM0 115200`.
+2. Pair the sensor (see "Standard pairing" below) or power-cycle it if already paired, either
+   triggers a `ZB_ZDO_SIGNAL_DEVICE_UPDATE` signal.
+3. Look for a pair of log lines like:
+   ```
+   I: TC update: short=0xebd5 status=3 tc_action=0 parent=0x0000
+   I:   MAC: 18:69:0a:ff:fe:68:bf:16
+   ```
+   The `MAC: ...` line is the sensor's IEEE address.
+
+**Byte order gotcha**: that log line prints the address MSB-first (human-readable order), but
+`known_sensors[]` in `src/main.c` stores it as a `zb_uint8_t ieee_addr[8]` array in the SDK's
+index order, which is the *reverse* of the printed string. E.g. `18:69:0a:ff:fe:68:bf:16` printed
+becomes `{ 0x16, 0xbf, 0x68, 0xfe, 0xff, 0x0a, 0x69, 0x18 }` in the array literal. Reverse the
+byte order when transcribing, add an entry to `known_sensors[]` with slot `0` (inside) or `1`
+(outside), and rebuild.
 
 ### Standard pairing
 
