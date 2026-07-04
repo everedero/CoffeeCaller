@@ -16,6 +16,7 @@
 /* Zigbee / ZBOSS */
 #include <zboss_api.h>
 #include <zboss_api_addons.h>
+#include <zboss_api_aps.h>
 #include <zb_mem_config_max.h>
 #include <zigbee/zigbee_error_handler.h>
 #include <zigbee/zigbee_app_utils.h>
@@ -29,6 +30,7 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <stdlib.h>
+#include <string.h>
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
@@ -42,7 +44,7 @@ LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
 /* --- Zigbee endpoint ------------------------------------------------------- */
 
-#define COORDINATOR_ENDPOINT    10
+#define COORDINATOR_ENDPOINT    1
 
 /* 2 server clusters (Basic + Identify) + 2 client clusters (Temp + Humidity) */
 #define COORD_IN_CLUSTER_NUM    2
@@ -217,6 +219,86 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.disconnected = ble_disconnected,
 };
 
+/* --- Sensor table & configure-reporting state ------------------------------ */
+
+#define MAX_SENSORS 4
+
+typedef struct {
+	zb_uint16_t short_addr;
+	uint8_t     cr_retry;
+	bool        active;
+} sensor_entry_t;
+
+static sensor_entry_t sensors[MAX_SENSORS];
+static zb_uint16_t    cr_pending_addr;
+static zb_int16_t     temp_rep_change = 50;   /* 0.5 °C in 0.01 °C units */
+static zb_uint16_t    hum_rep_change  = 100;  /* 1.0 % in 0.01 % units */
+
+static int sensor_find(zb_uint16_t addr)
+{
+	for (int i = 0; i < MAX_SENSORS; i++) {
+		if (sensors[i].active && sensors[i].short_addr == addr) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+static int sensor_alloc(zb_uint16_t addr)
+{
+	int slot = sensor_find(addr);
+
+	if (slot >= 0) {
+		return slot;
+	}
+	for (int i = 0; i < MAX_SENSORS; i++) {
+		if (!sensors[i].active) {
+			sensors[i].short_addr = addr;
+			sensors[i].active = true;
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* Forward declaration needed by zcl_ep_handler and retry_cr_alarm */
+/* --- IEEE address cache (populated from DEVICE_UPDATE) --------------------- */
+
+#define ADDR_CACHE_SIZE 8
+
+static struct {
+	zb_uint16_t short_addr;
+	zb_uint8_t  ieee_addr[8];
+	bool        valid;
+} addr_cache[ADDR_CACHE_SIZE];
+
+static void addr_cache_update(zb_uint16_t short_addr, const zb_uint8_t *ieee)
+{
+	int slot = 0;
+
+	for (int i = 0; i < ADDR_CACHE_SIZE; i++) {
+		if (!addr_cache[i].valid || addr_cache[i].short_addr == short_addr) {
+			slot = i;
+			break;
+		}
+	}
+	addr_cache[slot].short_addr = short_addr;
+	memcpy(addr_cache[slot].ieee_addr, ieee, 8);
+	addr_cache[slot].valid = true;
+}
+
+static const zb_uint8_t *addr_cache_lookup(zb_uint16_t short_addr)
+{
+	for (int i = 0; i < ADDR_CACHE_SIZE; i++) {
+		if (addr_cache[i].valid && addr_cache[i].short_addr == short_addr) {
+			return addr_cache[i].ieee_addr;
+		}
+	}
+	return NULL;
+}
+
+static void retry_cr_alarm(zb_uint8_t param);
+
 /* --- ZCL endpoint handler -------------------------------------------------- */
 
 /*
@@ -227,6 +309,33 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 {
 	zb_zcl_parsed_hdr_t *hdr = ZB_BUF_GET_PARAM(bufid, zb_zcl_parsed_hdr_t);
+
+	LOG_DBG("ZCL frame: cluster=0x%04x cmd=0x%02x src=0x%04x src_ep=%d dir=%d",
+		hdr->cluster_id, hdr->cmd_id,
+		hdr->addr_data.common_data.source.u.short_addr,
+		hdr->addr_data.common_data.src_endpoint,
+		hdr->cmd_direction);
+	LOG_HEXDUMP_DBG(zb_buf_begin(bufid), MIN(zb_buf_len(bufid), 32U), "ZCL payload");
+
+	/* Any ZCL frame from this sensor: cancel retry; register if unknown */
+	{
+		zb_uint16_t src = hdr->addr_data.common_data.source.u.short_addr;
+		int _idx = sensor_find(src);
+
+		if (_idx >= 0) {
+			(void)ZB_SCHEDULE_APP_ALARM_CANCEL(retry_cr_alarm,
+							   (zb_uint8_t)_idx);
+		} else {
+			/* Already reporting without rejoining (e.g. after coordinator
+			 * reflash) — register it so the table stays consistent */
+			int _new = sensor_alloc(src);
+
+			if (_new >= 0) {
+				LOG_INF("Registered existing sensor 0x%04x from ZCL report",
+					src);
+			}
+		}
+	}
 
 	if (hdr->cmd_id != ZB_ZCL_CMD_REPORT_ATTRIB) {
 		return ZB_FALSE;
@@ -241,8 +350,9 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 		if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
 		    rep->attr_id == ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID) {
 			temp_raw = *((int16_t *)rep->attr_value);
-			LOG_INF("Temperature: %d.%02d C",
-				temp_raw / 100, abs(temp_raw % 100));
+			LOG_INF("Temperature: %d.%02d C (src=0x%04x)",
+				temp_raw / 100, abs(temp_raw % 100),
+				hdr->addr_data.common_data.source.u.short_addr);
 			if (temp_notify_enabled) {
 				int16_t t = sys_cpu_to_le16(temp_raw);
 
@@ -252,8 +362,9 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 		} else if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT &&
 			   rep->attr_id == ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID) {
 			hum_raw = *((uint16_t *)rep->attr_value);
-			LOG_INF("Humidity: %d.%02d %%",
-				hum_raw / 100, hum_raw % 100);
+			LOG_INF("Humidity: %d.%02d %% (src=0x%04x)",
+				hum_raw / 100, hum_raw % 100,
+				hdr->addr_data.common_data.source.u.short_addr);
 			if (hum_notify_enabled) {
 				uint16_t h = sys_cpu_to_le16(hum_raw);
 
@@ -269,6 +380,21 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 	return ZB_FALSE;
 }
 
+/* --- Global APS data indication (diagnostic: catches ALL incoming APS frames) */
+
+static zb_uint8_t aps_data_indication(zb_bufid_t bufid)
+{
+	zb_apsde_data_indication_t *ind =
+		ZB_BUF_GET_PARAM(bufid, zb_apsde_data_indication_t);
+
+	LOG_DBG("APS frame: profile=0x%04x cluster=0x%04x "
+		"src=0x%04x src_ep=%d dst_ep=%d len=%d",
+		ind->profileid, ind->clusterid,
+		ind->src_addr, ind->src_endpoint, ind->dst_endpoint,
+		zb_buf_len(bufid));
+	return ZB_FALSE; /* not consumed; let normal dispatch continue */
+}
+
 /* --- Zigbee signal handler ------------------------------------------------- */
 
 static void steering_finished(zb_uint8_t param)
@@ -276,6 +402,84 @@ static void steering_finished(zb_uint8_t param)
 	ARG_UNUSED(param);
 	LOG_INF("Network steering finished");
 	dk_set_led_off(ZIGBEE_NETWORK_LED);
+}
+
+/* --- Configure reporting --------------------------------------------------- */
+
+/* configure_temp_reporting is called via zb_buf_get_out_delayed from retry_cr_alarm */
+static void configure_temp_reporting(zb_bufid_t bufid);
+
+static void retry_cr_alarm(zb_uint8_t param)
+{
+	uint8_t idx = param;
+
+	if (idx >= MAX_SENSORS || !sensors[idx].active) {
+		return;
+	}
+	sensors[idx].cr_retry++;
+	LOG_INF("Configure reporting retry %d/10 (0x%04x)",
+		sensors[idx].cr_retry, sensors[idx].short_addr);
+	cr_pending_addr = sensors[idx].short_addr;
+	zb_buf_get_out_delayed(configure_temp_reporting);
+}
+
+static void configure_hum_reporting(zb_bufid_t bufid)
+{
+	zb_uint8_t *ptr;
+	int idx;
+
+	if (!bufid) {
+		return;
+	}
+	ZB_ZCL_GENERAL_INIT_CONFIGURE_REPORTING_SRV_REQ(bufid, ptr,
+		ZB_ZCL_DISABLE_DEFAULT_RESPONSE);
+	ZB_ZCL_GENERAL_ADD_SEND_REPORT_CONFIGURE_REPORTING_REQ(ptr,
+		ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
+		ZB_ZCL_ATTR_TYPE_U16, 10, 300, (zb_uint8_t *)&hum_rep_change);
+	ZB_ZCL_GENERAL_SEND_CONFIGURE_REPORTING_REQ(bufid, ptr,
+		cr_pending_addr, ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+		1, COORDINATOR_ENDPOINT,
+		ZB_AF_HA_PROFILE_ID, ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT, NULL);
+	idx = sensor_find(cr_pending_addr);
+	LOG_INF("Configure reporting sent: humidity 0x%04x (retry=%d)",
+		cr_pending_addr, idx >= 0 ? sensors[idx].cr_retry : 0);
+	/* Retry every 60 s — sleepy device may not be awake yet */
+	if (idx >= 0 && sensors[idx].cr_retry < 10) {
+		ZB_ERROR_CHECK(ZB_SCHEDULE_APP_ALARM(retry_cr_alarm, (zb_uint8_t)idx,
+						     ZB_TIME_ONE_SECOND * 60));
+	}
+}
+
+static void configure_temp_reporting(zb_bufid_t bufid)
+{
+	zb_uint8_t *ptr;
+
+	if (!bufid) {
+		return;
+	}
+	ZB_ZCL_GENERAL_INIT_CONFIGURE_REPORTING_SRV_REQ(bufid, ptr,
+		ZB_ZCL_DISABLE_DEFAULT_RESPONSE);
+	ZB_ZCL_GENERAL_ADD_SEND_REPORT_CONFIGURE_REPORTING_REQ(ptr,
+		ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
+		ZB_ZCL_ATTR_TYPE_S16, 10, 300, (zb_uint8_t *)&temp_rep_change);
+	ZB_ZCL_GENERAL_SEND_CONFIGURE_REPORTING_REQ(bufid, ptr,
+		cr_pending_addr, ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+		1, COORDINATOR_ENDPOINT,
+		ZB_AF_HA_PROFILE_ID, ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, NULL);
+	LOG_INF("Configure reporting sent: temperature 0x%04x", cr_pending_addr);
+	zb_buf_get_out_delayed(configure_hum_reporting);
+}
+
+static void start_configure_reporting(zb_uint8_t param)
+{
+	uint8_t idx = param;
+
+	if (idx >= MAX_SENSORS || !sensors[idx].active) {
+		return;
+	}
+	sensors[idx].cr_retry = 0;
+	cr_pending_addr = sensors[idx].short_addr;
+	zb_buf_get_out_delayed(configure_temp_reporting);
 }
 
 static void identify_cb(zb_bufid_t bufid)
@@ -346,6 +550,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 	case ZB_BDB_SIGNAL_STEERING:
 		if (status == RET_OK) {
 			LOG_INF("Network steering started (180 s open)");
+			zb_bdb_set_legacy_device_support(1);
 			err = ZB_SCHEDULE_APP_ALARM(
 				steering_finished, 0,
 				ZB_TIME_ONE_SECOND *
@@ -358,7 +563,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 		zb_zdo_signal_device_annce_params_t *params =
 			ZB_ZDO_SIGNAL_GET_PARAMS(
 				sg, zb_zdo_signal_device_annce_params_t);
-		LOG_INF("Device joined: short=0x%04hx",
+		LOG_INF("Device announced: short=0x%04hx (join complete)",
 			params->device_short_addr);
 		/* Extend the steering window so more devices can join */
 		err = ZB_SCHEDULE_APP_ALARM_CANCEL(steering_finished,
@@ -372,7 +577,87 @@ void zboss_signal_handler(zb_bufid_t bufid)
 		}
 	} break;
 
+	/* TC update: device associated at MAC/NWK level (before key transport).
+	 * status: 0=secured-rejoin 1=unsecured-join 2=left 3=tc-rejoin
+	 * tc_action: 0=authorize(send key) 1=deny(send remove) 2=ignore */
+	case ZB_ZDO_SIGNAL_DEVICE_UPDATE: {
+		zb_zdo_signal_device_update_params_t *p =
+			ZB_ZDO_SIGNAL_GET_PARAMS(
+				sg, zb_zdo_signal_device_update_params_t);
+		LOG_INF("TC update: short=0x%04x status=%d tc_action=%d parent=0x%04x",
+			p->short_addr, p->status, p->tc_action, p->parent_short);
+		LOG_INF("  MAC: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+			p->long_addr[7], p->long_addr[6], p->long_addr[5],
+			p->long_addr[4], p->long_addr[3], p->long_addr[2],
+			p->long_addr[1], p->long_addr[0]);
+		addr_cache_update(p->short_addr, p->long_addr);
+	} break;
+
+	/* DEVICE_AUTHORIZED fires after the full Zigbee 3.0 TCLK exchange.
+	 * type: 0=legacy 1=r21_tclk(ZB3.0)
+	 * status(legacy): 0=ok 1=fail
+	 * status(r21_tclk): 0=ok 1=timeout 2=fail */
+	case ZB_ZDO_SIGNAL_DEVICE_AUTHORIZED: {
+		zb_zdo_signal_device_authorized_params_t *p =
+			ZB_ZDO_SIGNAL_GET_PARAMS(
+				sg, zb_zdo_signal_device_authorized_params_t);
+		LOG_INF("Device authorized: short=0x%04x type=%d status=%d",
+			p->short_addr, p->authorization_type,
+			p->authorization_status);
+		if (p->authorization_status == 0) {
+			const zb_uint8_t *new_ieee = addr_cache_lookup(p->short_addr);
+
+			/* Deactivate stale slots for the same physical device
+			 * (same IEEE, old short address after re-join) */
+			if (new_ieee != NULL) {
+				for (int i = 0; i < MAX_SENSORS; i++) {
+					const zb_uint8_t *old_ieee;
+
+					if (!sensors[i].active ||
+					    sensors[i].short_addr == p->short_addr) {
+						continue;
+					}
+					old_ieee = addr_cache_lookup(sensors[i].short_addr);
+					if (old_ieee != NULL &&
+					    memcmp(old_ieee, new_ieee, 8) == 0) {
+						LOG_INF("Sensor 0x%04x rejoined as 0x%04x, clearing stale slot",
+							sensors[i].short_addr, p->short_addr);
+						(void)ZB_SCHEDULE_APP_ALARM_CANCEL(
+							retry_cr_alarm, (zb_uint8_t)i);
+						sensors[i].active = false;
+					}
+				}
+			}
+
+			int slot = sensor_alloc(p->short_addr);
+
+			if (slot < 0) {
+				LOG_WRN("Sensor table full, ignoring 0x%04x",
+					p->short_addr);
+				break;
+			}
+			/* Stagger by slot index to avoid simultaneous configure reporting */
+			ZB_SCHEDULE_APP_ALARM(start_configure_reporting,
+					      (zb_uint8_t)slot,
+					      ZB_TIME_ONE_SECOND * (2 + slot * 5));
+		}
+	} break;
+
+	/* Permit-join window open/close broadcast */
+	case ZB_NWK_SIGNAL_PERMIT_JOIN_STATUS:
+		LOG_INF("Permit-join status changed: duration=%d s", status);
+		break;
+
+	case ZB_NLME_STATUS_INDICATION: {
+		zb_zdo_signal_nlme_status_indication_params_t *p =
+			ZB_ZDO_SIGNAL_GET_PARAMS(
+				sg, zb_zdo_signal_nlme_status_indication_params_t);
+		LOG_INF("NLME status: nwk_status=0x%02x addr=0x%04x",
+			p->nlme_status.status, p->nlme_status.network_addr);
+	} break;
+
 	default:
+		LOG_DBG("Unhandled signal %d (status %d)", sig, status);
 		ZB_ERROR_CHECK(zigbee_default_signal_handler(bufid));
 		break;
 	}
@@ -432,6 +717,9 @@ int main(void)
 		return err;
 	}
 	LOG_INF("BLE advertising started (ESS)");
+
+	/* Register global APS data indication to log all incoming frames */
+	zb_af_set_data_indication(aps_data_indication);
 
 	/* Start Zigbee — opens network automatically on first boot */
 	zigbee_enable();
