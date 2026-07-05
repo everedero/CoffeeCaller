@@ -64,14 +64,14 @@ If flashing fails, check that the OpenOCD config uses `ftdi` as the interface (n
 The board acts as a Zigbee coordinator. It opens the network on boot and keeps it open for
 3 minutes.
 
-Each sensor is pinned to a fixed slot by its IEEE (MAC) address (see `known_sensors` in
-`src/main.c`), rather than by join order — so "Sensor 1" (inside) and "Sensor 2" (outside) stay
-consistent across reboots regardless of which sensor happens to (re)join first.
+Only the **outside** sensor is pinned by its IEEE (MAC) address (see `outside_ieee_addr` in
+`src/main.c`). The **inside** sensor needs no hardcoding: whichever other Sonoff joins the
+network is automatically assigned to the inside slot.
 
-### Finding a sensor's MAC address to hard-code
+### Finding the outside sensor's MAC address to hard-code
 
-When pairing a new or replacement sensor, its IEEE address isn't known ahead of time, retrieve
-it from the coordinator's serial console:
+This is only needed when pairing a new or replacement *outside* sensor — its IEEE address isn't
+known ahead of time, so retrieve it from the coordinator's serial console:
 
 1. Connect: `screen /dev/ttyACM0 115200`.
 2. Pair the sensor (see "Standard pairing" below) or power-cycle it if already paired, either
@@ -84,11 +84,10 @@ it from the coordinator's serial console:
    The `MAC: ...` line is the sensor's IEEE address.
 
 **Byte order gotcha**: that log line prints the address MSB-first (human-readable order), but
-`known_sensors[]` in `src/main.c` stores it as a `zb_uint8_t ieee_addr[8]` array in the SDK's
-index order, which is the *reverse* of the printed string. E.g. `18:69:0a:ff:fe:68:bf:16` printed
+`outside_ieee_addr` in `src/main.c` stores it as a `zb_uint8_t[8]` array in the SDK's index
+order, which is the *reverse* of the printed string. E.g. `18:69:0a:ff:fe:68:bf:16` printed
 becomes `{ 0x16, 0xbf, 0x68, 0xfe, 0xff, 0x0a, 0x69, 0x18 }` in the array literal. Reverse the
-byte order when transcribing, add an entry to `known_sensors[]` with slot `0` (inside) or `1`
-(outside), and rebuild.
+byte order when transcribing, update `outside_ieee_addr`, and rebuild.
 
 ### Standard pairing
 
@@ -124,10 +123,11 @@ Values update whenever the sensor reports (every 10–300 s or on >=0.5 °C / >=
 
 | LED | Meaning |
 |-----|---------|
-| LED1 (white) | Heartbeat, blinks once per second |
+| LED1 (white) | Off in normal operation; blinks once per second if the inside or outside sensor hasn't reported in over 10 minutes |
 | LED3 (white) | Zigbee network open, on while pairing window is active |
 | LED4 (white) | Identify mode, blinks fast during ZCL Identify |
 | RGB LED 0 (red) | Ventilation alarm enabled |
+| RGB LED 1 (blue/orange) | Outside vs inside temperature: blue when outside is cooler (fresher), orange when outside is hotter — always updated regardless of whether the alarm is enabled |
 
 ### Buttons
 
@@ -148,7 +148,8 @@ temperatures. Every 60 seconds a sample is taken; the alarm triggers when:
 - Inside temperature > 25 °C, and
 - The alarm has not triggered in the last hour.
 
-When triggered, the buzzer sounds for 10 seconds. Press SW0 again to disable.
+When triggered, the buzzer beeps in short pulses (200 ms on/off) for 10 seconds. Press SW0 again
+to disable.
 
 The 20-minute warm-up window means the alarm will not fire until at least 20 samples have
 been collected after boot.

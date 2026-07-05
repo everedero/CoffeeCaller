@@ -20,3 +20,6 @@ void ventilation_toggle(void);
 void ventilation_buzz_test(void);
 
 bool ventilation_is_enabled(void);
+
+/* True if the inside or outside sensor hasn't reported recently */
+bool ventilation_sensor_missing(void);
