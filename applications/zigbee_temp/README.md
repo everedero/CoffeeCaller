@@ -3,13 +3,20 @@
 Zigbee coordinator and BLE gateway, built for the CoffeeCaller nRF52840 board.
 
 Ventilation alarm: it buzzes when the inside room is warmer than outside, to wake you up so you
-go open the window to cool the room down.
+go open the window to cool the room down. It also warns you when it is time to close the windows
+when the sun is back.
 
-It receives temperature and humidity from two Sonoff SNZB-02P Zigbee sensors, and
+The buzzer can be disabled, and an LED indicator tells you if it’s fresher inside (orange LED)
+or outside (blue LED).
+
+The board receives temperature and humidity from two Sonoff SNZB-02P Zigbee sensors, and
 re-broadcasts them over BLE as an Environmental Sensing Service (ESS), readable by any
-standard BLE app (nRF Connect, Home Assistant,... ).
+standard BLE app (nRF Connect, Home Assistant, but I could not find any F-Droid open-source
+equivalent app).
 
-This application was completely vibe-coded, do not use for reference.
+CoffeeCaller onboard temperature and humidity sensor is not used for this project yet.
+
+This application was completely vibe-coded, do not use it for reference.
 
 ## Project Hardware
 
@@ -24,9 +31,9 @@ SWD resistor hack, as a flashing probe.
 
 ## Workspace setup
 
-This application targets NCS v2.8.0 — the last nRF Connect SDK release that still includes the
-ZBOSS Zigbee stack — and needs its own, separate west workspace (don't reuse a workspace already
-set up for a different NCS version).
+This application targets NCS v2.8.0, the last nRF Connect SDK release that still includes the
+ZBOSS Zigbee stack. It needs its own, separate west workspace, do not reuse a workspace already
+set up for a different NCS version.
 
 ### Prerequisites
 
@@ -37,11 +44,16 @@ set up for a different NCS version).
 
 ### Initialize the workspace
 
+If west is not installed:
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install west
+```
 
+Now bring in the Nordic nRF Connect SDK:
+```bash
 west init -m https://github.com/nrfconnect/sdk-nrf --mr v2.8.0 ncs/v2.8.0
 cd ncs/v2.8.0
 west update
@@ -67,22 +79,32 @@ See [`patches/zb_nrf_crypto.patch`](patches/zb_nrf_crypto.patch) for the exact d
 
 ### Clone this repository
 
-CoffeeCaller is not part of the NCS manifest — clone it as a sibling of `ncs/v2.8.0`:
+CoffeeCaller is not part of the NCS manifest, clone it as a sibling of `ncs/v2.8.0`:
 
 ```bash
 git clone <your-fork-url> CoffeeCaller
 ```
 
-## Build
+This is the resulting tree:
 
-Requires the NCS v2.8.0 workspace set up above.
+```bash
+ncs
+├── CoffeeCaller
+├── bootloader
+├── modules
+├── nrf
+├── nrfxlib
+├── v2.8.0
+├── zephyr
+[...]
+```
+
+## Build
 
 ```bash
 cd ./ncs/v2.8.0
 west build -b coffeecaller_nrf52/nrf52840 ../CoffeeCaller/applications/zigbee_temp -p always -- -DZEPHYR_EXTRA_MODULES="$(realpath ../CoffeeCaller)"
 ```
-
----
 
 ## Flash (FT2232H via OpenOCD)
 
@@ -93,14 +115,16 @@ west build -b coffeecaller_nrf52/nrf52840 ../CoffeeCaller/applications/zigbee_te
 | ADBUS0 | TCK | SWCLK |
 | ADBUS1 | TDI (through 270 Ω) | SWDIO |
 | ADBUS2 | TDO (direct) | SWDIO |
-| ADBUS4 | nSRST (optional) | nRESET |
 
-Connect FTDI2232H GND to CoffeeCaller GND. Power the target independently.
+Connect FTDI2232H GND to CoffeeCaller GND. Both USB, from FTDI and target board, should be plugged.
 
 Verify the programmer is detected:
 ```
 lsusb | grep FT2232
 ```
+
+Note: do not connect nRST on ADBUS4, for some reason it does not work.
+CoffeeCaller do not provide a proper nRST pin anyway.
 
 ### Flash command
 
@@ -115,13 +139,13 @@ If flashing fails, check that the OpenOCD config uses `ftdi` as the interface (n
 The board acts as a Zigbee coordinator. It opens the network on boot and keeps it open for
 3 minutes.
 
-Only the **outside** sensor is pinned by its IEEE (MAC) address (see `outside_ieee_addr` in
-`src/main.c`). The **inside** sensor needs no hardcoding: whichever other Sonoff joins the
+Only the outside sensor is pinned by its IEEE (MAC) address (see `outside_ieee_addr` in
+`src/main.c`). The inside sensor needs no hardcoding: whichever other Sonoff joins the
 network is automatically assigned to the inside slot.
 
 ### Finding the outside sensor's MAC address to hard-code
 
-This is only needed when pairing a new or replacement *outside* sensor — its IEEE address isn't
+This is only needed when pairing a new or replacement outside sensor: its IEEE address isn't
 known ahead of time, so retrieve it from the coordinator's serial console:
 
 1. Connect: `screen /dev/ttyACM0 115200`.
@@ -185,7 +209,7 @@ Values update whenever the sensor reports (every 10–300 s or on >=0.5 °C / >=
 | LED3 (white) | Zigbee network open, on while pairing window is active |
 | LED4 (white) | Identify mode, blinks fast during ZCL Identify |
 | RGB LED 0 (red) | Ventilation alarm enabled |
-| RGB LED 1 (blue/orange) | Outside vs inside temperature: blue when outside is cooler (fresher), orange when outside is hotter — always updated regardless of whether the alarm is enabled |
+| RGB LED 1 (blue/orange) | Outside vs inside temperature: blue when outside is cooler, orange when outside is hotter |
 
 ### Buttons
 
