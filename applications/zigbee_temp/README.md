@@ -22,9 +22,60 @@ This application was completely vibe-coded, do not use for reference.
 Since I am cheap and could not make the UC2 bootloader work, I use a FTDI FT2232 mini module, with
 SWD resistor hack, as a flashing probe.
 
+## Workspace setup
+
+This application targets NCS v2.8.0 — the last nRF Connect SDK release that still includes the
+ZBOSS Zigbee stack — and needs its own, separate west workspace (don't reuse a workspace already
+set up for a different NCS version).
+
+### Prerequisites
+
+- Python 3 with `pip` and `venv`
+- The [Zephyr SDK](https://docs.zephyrproject.org/latest/develop/toolchains/zephyr_sdk.html)
+  (`arm-zephyr-eabi` toolchain)
+- `ninja` and `device-tree-compiler` (Debian/Ubuntu: `apt install ninja-build device-tree-compiler`)
+
+### Initialize the workspace
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install west
+
+west init -m https://github.com/nrfconnect/sdk-nrf --mr v2.8.0 ncs/v2.8.0
+cd ncs/v2.8.0
+west update
+
+pip install -r nrf/scripts/requirements.txt -r zephyr/scripts/requirements.txt
+```
+
+### Apply the required Zigbee/BLE AES fix
+
+NCS v2.8.0 has a crypto-selection bug: when both BLE and Zigbee are enabled, it picks the BLE
+controller's AES routine (`bt_encrypt_be()`) over Zigbee's own, even with
+`CONFIG_ZIGBEE_USE_SOFTWARE_AES=y` set. `bt_encrypt_be()` byte-reverses its input/output
+(big-endian convention), which is wrong for ZBOSS, Zigbee network-key transport silently fails
+and sensors can never join. This lives in the vendored `nrf/` checkout, not in this repo, so it
+must be reapplied after every fresh `west init`/`west update` of this workspace:
+
+```bash
+cd ncs/v2.8.0/nrf
+git apply /path/to/CoffeeCaller/applications/zigbee_temp/patches/zb_nrf_crypto.patch
+```
+
+See [`patches/zb_nrf_crypto.patch`](patches/zb_nrf_crypto.patch) for the exact diff.
+
+### Clone this repository
+
+CoffeeCaller is not part of the NCS manifest — clone it as a sibling of `ncs/v2.8.0`:
+
+```bash
+git clone <your-fork-url> CoffeeCaller
+```
+
 ## Build
 
-Requires the NCS v2.8.0 workspace (last release that includes ZBOSS/Zigbee).
+Requires the NCS v2.8.0 workspace set up above.
 
 ```bash
 cd ./ncs/v2.8.0
@@ -107,6 +158,13 @@ does not trigger a new join:
 1. Remove the battery
 2. Reinsert the battery
 3. The sensor will perform an unsecured join and pair to whatever coordinator is open.
+
+### Device reboot
+
+If you reboot the CoffeeCaller board, sensors will automatically rejoin after a while.
+However, it is much faster to force the joining process by pressing the sensors button
+after CoffeeCaller has started.
+
 
 ## Application behaviour
 
