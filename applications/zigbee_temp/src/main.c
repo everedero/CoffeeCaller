@@ -35,24 +35,24 @@ LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
 /* LEDs / buttons (nRF52840 DK) */
 
-#define RUN_STATUS_LED          DK_LED1
-#define ZIGBEE_NETWORK_LED      DK_LED3
-#define IDENTIFY_LED            DK_LED4
-#define VENT_BUTTON             DK_BTN1_MSK
-#define NETWORK_REOPEN_BUTTON   DK_BTN2_MSK
-#define VENT_TEST_BUTTON        DK_BTN3_MSK
-#define FACTORY_RESET_BUTTON    DK_BTN4_MSK
+#define RUN_STATUS_LED        DK_LED1
+#define ZIGBEE_NETWORK_LED    DK_LED3
+#define IDENTIFY_LED          DK_LED4
+#define VENT_BUTTON           DK_BTN1_MSK
+#define NETWORK_REOPEN_BUTTON DK_BTN2_MSK
+#define VENT_TEST_BUTTON      DK_BTN3_MSK
+#define FACTORY_RESET_BUTTON  DK_BTN4_MSK
 
 /* Zigbee endpoint */
 
-#define COORDINATOR_ENDPOINT    1
+#define COORDINATOR_ENDPOINT  1
 
 /* 2 server clusters (Basic + Identify) + 2 client clusters (Temp + Humidity) */
-#define COORD_IN_CLUSTER_NUM    2
-#define COORD_OUT_CLUSTER_NUM   2
+#define COORD_IN_CLUSTER_NUM  2
+#define COORD_OUT_CLUSTER_NUM 2
 
 struct zb_device_ctx {
-	zb_zcl_basic_attrs_t    basic_attr;
+	zb_zcl_basic_attrs_t  basic_attr;
 	zb_zcl_identify_attrs_t identify_attr;
 };
 
@@ -100,17 +100,17 @@ ZB_DECLARE_SIMPLE_DESC(2, 2);
 
 ZB_AF_SIMPLE_DESC_TYPE(2, 2)
 	coord_simple_desc = {
-	COORDINATOR_ENDPOINT,
-	ZB_AF_HA_PROFILE_ID,
-	ZB_HA_RANGE_EXTENDER_DEVICE_ID,
-	0,
-	0,
-	COORD_IN_CLUSTER_NUM,
-	COORD_OUT_CLUSTER_NUM,
-	ZB_ZCL_CLUSTER_ID_BASIC,
-	ZB_ZCL_CLUSTER_ID_IDENTIFY,
-	ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
-	ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
+		COORDINATOR_ENDPOINT,
+		ZB_AF_HA_PROFILE_ID,
+		ZB_HA_RANGE_EXTENDER_DEVICE_ID,
+		0,
+		0,
+		COORD_IN_CLUSTER_NUM,
+		COORD_OUT_CLUSTER_NUM,
+		ZB_ZCL_CLUSTER_ID_BASIC,
+		ZB_ZCL_CLUSTER_ID_IDENTIFY,
+		ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
+		ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
 };
 
 ZB_AF_DECLARE_ENDPOINT_DESC(
@@ -134,8 +134,8 @@ ZBOSS_DECLARE_DEVICE_CTX_1_EP(coord_device, coord_ep);
  * Slots >= MAX_ESS_SENSORS are clamped to MAX_ESS_SENSORS-1 (last pair).
  */
 #define MAX_ESS_SENSORS 2
-#define ESS_TEMP_ATTR_IDX(s)  (2 + (s) * 8)
-#define ESS_HUM_ATTR_IDX(s)   (6 + (s) * 8)
+#define ESS_TEMP_ATTR_IDX(s) (2 + (s) * 8)
+#define ESS_HUM_ATTR_IDX(s)  (6 + (s) * 8)
 
 /*
  * Written from the ZBOSS callback thread, read from BLE GATT read callbacks.
@@ -143,13 +143,13 @@ ZBOSS_DECLARE_DEVICE_CTX_1_EP(coord_device, coord_ep);
  * but we use a mutex to also protect the notify flags.
  */
 static K_MUTEX_DEFINE(sensor_lock);
-static int16_t  temp_raw[MAX_ESS_SENSORS];  /* 0.01 degC, sint16 per ESS spec */
-static uint16_t hum_raw[MAX_ESS_SENSORS];   /* 0.01 %,  uint16 per ESS spec */
+static int16_t temp_raw[MAX_ESS_SENSORS];  /* 0.01 degC, sint16 per ESS spec */
+static uint16_t hum_raw[MAX_ESS_SENSORS]; /* 0.01 %,  uint16 per ESS spec */
 
 static bool temp_notify_enabled[MAX_ESS_SENSORS];
 static bool hum_notify_enabled[MAX_ESS_SENSORS];
 
-/*  BLE ESS GATT service */
+/*BLE ESS GATT service */
 
 /* Single read_s16/read_u16 handles all instances via attr->user_data */
 static ssize_t read_s16(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -190,42 +190,42 @@ static void hum_ccc_changed_1(const struct bt_gatt_attr *attr, uint16_t value)
 
 /*
  * ESS attribute map (BT_GATT_CHARACTERISTIC = 2 attrs; each descriptor = 1):
- *   [0]  Primary service (ESS 0x181A)
- *   Sensor 0:
- *   [1][2]  Temp decl+value  [3] CCC  [4] CUD "Sensor 1"
- *   [5][6]  Hum  decl+value  [7] CCC  [8] CUD "Sensor 1"
- *   Sensor 1:
- *   [9][10] Temp decl+value [11] CCC [12] CUD "Sensor 2"
- *  [13][14] Hum  decl+value [15] CCC [16] CUD "Sensor 2"
+ * [0]  Primary service (ESS 0x181A)
+ * Sensor 0:
+ * [1][2]  Temp decl+value  [3] CCC  [4] CUD "Sensor 1"
+ * [5][6]  Hum  decl+value  [7] CCC  [8] CUD "Sensor 1"
+ * Sensor 1:
+ * [9][10] Temp decl+value [11] CCC [12] CUD "Sensor 2"
+ *[13][14] Hum  decl+value [15] CCC [16] CUD "Sensor 2"
  *
- *  Notify targets: ESS_TEMP_ATTR_IDX(s) = 2+s*8, ESS_HUM_ATTR_IDX(s) = 6+s*8
+ *Notify targets: ESS_TEMP_ATTR_IDX(s) = 2+s*8, ESS_HUM_ATTR_IDX(s) = 6+s*8
  */
 BT_GATT_SERVICE_DEFINE(ess_svc,
 	BT_GATT_PRIMARY_SERVICE(BT_UUID_ESS),
 	/* Sensor slot 0 */
 	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE,
-			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-			       BT_GATT_PERM_READ,
-			       read_s16, NULL, &temp_raw[0]),
+			     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+			     BT_GATT_PERM_READ,
+			     read_s16, NULL, &temp_raw[0]),
 	BT_GATT_CCC(temp_ccc_changed_0, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 	BT_GATT_CUD("Sensor 1", BT_GATT_PERM_READ),
 	BT_GATT_CHARACTERISTIC(BT_UUID_HUMIDITY,
-			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-			       BT_GATT_PERM_READ,
-			       read_u16, NULL, &hum_raw[0]),
+			     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+			     BT_GATT_PERM_READ,
+			     read_u16, NULL, &hum_raw[0]),
 	BT_GATT_CCC(hum_ccc_changed_0, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 	BT_GATT_CUD("Sensor 1", BT_GATT_PERM_READ),
 	/* Sensor slot 1 */
 	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE,
-			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-			       BT_GATT_PERM_READ,
-			       read_s16, NULL, &temp_raw[1]),
+			     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+			     BT_GATT_PERM_READ,
+			     read_s16, NULL, &temp_raw[1]),
 	BT_GATT_CCC(temp_ccc_changed_1, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 	BT_GATT_CUD("Sensor 2", BT_GATT_PERM_READ),
 	BT_GATT_CHARACTERISTIC(BT_UUID_HUMIDITY,
-			       BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-			       BT_GATT_PERM_READ,
-			       read_u16, NULL, &hum_raw[1]),
+			     BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+			     BT_GATT_PERM_READ,
+			     read_u16, NULL, &hum_raw[1]),
 	BT_GATT_CCC(hum_ccc_changed_1, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 	BT_GATT_CUD("Sensor 2", BT_GATT_PERM_READ),
 );
@@ -255,24 +255,24 @@ static void ble_disconnected(struct bt_conn *conn, uint8_t reason)
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
-	.connected    = ble_connected,
+	.connected  = ble_connected,
 	.disconnected = ble_disconnected,
 };
 
-/*  Sensor table & configure-reporting state  */
+/*Sensor table & configure-reporting state  */
 
 #define MAX_SENSORS 4
 
 typedef struct {
 	zb_uint16_t short_addr;
-	uint8_t     cr_retry;
-	bool        active;
+	uint8_t   cr_retry;
+	bool      active;
 } sensor_entry_t;
 
 static sensor_entry_t sensors[MAX_SENSORS];
-static zb_uint16_t    cr_pending_addr;
-static zb_int16_t     temp_rep_change = 50;   /* 0.5 degC in 0.01 degC units */
-static zb_uint16_t    hum_rep_change  = 100;  /* 1.0 % in 0.01 % units */
+static zb_uint16_t  cr_pending_addr;
+static zb_int16_t   temp_rep_change = 50;   /* 0.5 degC in 0.01 degC units */
+static zb_uint16_t  hum_rep_change  = 100;  /* 1.0 % in 0.01 % units */
 
 /*
  * Only the outside sensor is pinned by IEEE (MAC) address; the inside sensor
@@ -335,9 +335,9 @@ static int sensor_alloc(zb_uint16_t addr, const zb_uint8_t *ieee)
 #define ADDR_CACHE_SIZE 8
 
 static struct {
-	zb_uint16_t short_addr;
-	zb_uint8_t  ieee_addr[8];
-	bool        valid;
+	zb_uint16_t  short_addr;
+	zb_uint8_t   ieee_addr[8];
+	bool      valid;
 } addr_cache[ADDR_CACHE_SIZE];
 
 static void addr_cache_update(zb_uint16_t short_addr, const zb_uint8_t *ieee)
@@ -394,7 +394,7 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 		(void)ZB_SCHEDULE_APP_ALARM_CANCEL(retry_cr_alarm, (zb_uint8_t)slot);
 	} else {
 		/* Already reporting without rejoining (e.g. after coordinator
-		 * reflash).  Register it so the table stays consistent */
+		 * reflash).Register it so the table stays consistent */
 		slot = sensor_alloc(src, addr_cache_lookup(src));
 		if (slot >= 0) {
 			LOG_INF("Registered existing sensor 0x%04x from ZCL report", src);
@@ -413,7 +413,7 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 		k_mutex_lock(&sensor_lock, K_FOREVER);
 
 		if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
-		    rep->attr_id == ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID) {
+		  rep->attr_id == ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID) {
 			temp_raw[ess] = *((int16_t *)rep->attr_value);
 			LOG_INF("Temperature: %d.%02d C (slot=%d)",
 				temp_raw[ess] / 100, abs(temp_raw[ess] % 100), ess);
@@ -422,11 +422,11 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 				int16_t t = sys_cpu_to_le16(temp_raw[ess]);
 
 				bt_gatt_notify(NULL,
-					       &ess_svc.attrs[ESS_TEMP_ATTR_IDX(ess)],
-					       &t, sizeof(t));
+					     &ess_svc.attrs[ESS_TEMP_ATTR_IDX(ess)],
+					     &t, sizeof(t));
 			}
 		} else if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT &&
-			   rep->attr_id == ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID) {
+			 rep->attr_id == ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID) {
 			hum_raw[ess] = *((uint16_t *)rep->attr_value);
 			LOG_INF("Humidity: %d.%02d %% (slot=%d)",
 				hum_raw[ess] / 100, hum_raw[ess] % 100, ess);
@@ -434,8 +434,8 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 				uint16_t h = sys_cpu_to_le16(hum_raw[ess]);
 
 				bt_gatt_notify(NULL,
-					       &ess_svc.attrs[ESS_HUM_ATTR_IDX(ess)],
-					       &h, sizeof(h));
+					     &ess_svc.attrs[ESS_HUM_ATTR_IDX(ess)],
+					     &h, sizeof(h));
 			}
 		}
 
@@ -470,7 +470,7 @@ static void steering_finished(zb_uint8_t param)
 	dk_set_led_off(ZIGBEE_NETWORK_LED);
 }
 
-/*  Configure reporting  */
+/*Configure reporting  */
 
 /* configure_temp_reporting is called via zb_buf_get_out_delayed from retry_cr_alarm */
 static void configure_temp_reporting(zb_bufid_t bufid);
@@ -512,7 +512,7 @@ static void configure_hum_reporting(zb_bufid_t bufid)
 	/* Retry every 60 s. Sleepy device may not be awake yet */
 	if (idx >= 0 && sensors[idx].cr_retry < 10) {
 		ZB_ERROR_CHECK(ZB_SCHEDULE_APP_ALARM(retry_cr_alarm, (zb_uint8_t)idx,
-						     ZB_TIME_ONE_SECOND * 60));
+						   ZB_TIME_ONE_SECOND * 60));
 	}
 }
 
@@ -555,10 +555,10 @@ static void identify_cb(zb_bufid_t bufid)
 	if (bufid) {
 		dk_set_led(IDENTIFY_LED, (++blink) % 2);
 		ZB_SCHEDULE_APP_ALARM(identify_cb, bufid,
-				      ZB_MILLISECONDS_TO_BEACON_INTERVAL(100));
+				    ZB_MILLISECONDS_TO_BEACON_INTERVAL(100));
 	} else {
 		zb_ret_t err = ZB_SCHEDULE_APP_ALARM_CANCEL(identify_cb,
-							     ZB_ALARM_ANY_PARAM);
+							   ZB_ALARM_ANY_PARAM);
 		ZVUNUSED(err);
 		dk_set_led(IDENTIFY_LED, 0);
 	}
@@ -579,7 +579,7 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 
 	if (buttons & NETWORK_REOPEN_BUTTON) {
 		(void)ZB_SCHEDULE_APP_ALARM_CANCEL(steering_finished,
-						   ZB_ALARM_ANY_PARAM);
+						 ZB_ALARM_ANY_PARAM);
 		comm_status = bdb_start_top_level_commissioning(
 			ZB_BDB_NETWORK_STEERING);
 		if (comm_status) {
@@ -641,7 +641,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 			params->device_short_addr);
 		/* Extend the steering window so more devices can join */
 		err = ZB_SCHEDULE_APP_ALARM_CANCEL(steering_finished,
-						   ZB_ALARM_ANY_PARAM);
+						 ZB_ALARM_ANY_PARAM);
 		if (err == RET_OK) {
 			err = ZB_SCHEDULE_APP_ALARM(
 				steering_finished, 0,
@@ -660,7 +660,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 				sg, zb_zdo_signal_device_update_params_t);
 		LOG_INF("TC update: short=0x%04x status=%d tc_action=%d parent=0x%04x",
 			p->short_addr, p->status, p->tc_action, p->parent_short);
-		LOG_INF("  MAC: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
+		LOG_INF("MAC: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
 			p->long_addr[7], p->long_addr[6], p->long_addr[5],
 			p->long_addr[4], p->long_addr[3], p->long_addr[2],
 			p->long_addr[1], p->long_addr[0]);
@@ -688,12 +688,12 @@ void zboss_signal_handler(zb_bufid_t bufid)
 					const zb_uint8_t *old_ieee;
 
 					if (!sensors[i].active ||
-					    sensors[i].short_addr == p->short_addr) {
+					  sensors[i].short_addr == p->short_addr) {
 						continue;
 					}
 					old_ieee = addr_cache_lookup(sensors[i].short_addr);
 					if (old_ieee != NULL &&
-					    memcmp(old_ieee, new_ieee, 8) == 0) {
+					  memcmp(old_ieee, new_ieee, 8) == 0) {
 						LOG_INF("Sensor 0x%04x rejoined as 0x%04x, clearing stale slot",
 							sensors[i].short_addr, p->short_addr);
 						(void)ZB_SCHEDULE_APP_ALARM_CANCEL(
@@ -712,8 +712,8 @@ void zboss_signal_handler(zb_bufid_t bufid)
 			}
 			/* Stagger by slot index to avoid simultaneous configure reporting */
 			ZB_SCHEDULE_APP_ALARM(start_configure_reporting,
-					      (zb_uint8_t)slot,
-					      ZB_TIME_ONE_SECOND * (2 + slot * 5));
+					    (zb_uint8_t)slot,
+					    ZB_TIME_ONE_SECOND * (2 + slot * 5));
 		}
 	} break;
 
@@ -737,8 +737,8 @@ void zboss_signal_handler(zb_bufid_t bufid)
 	}
 
 	if (ZB_JOINED() &&
-	    ZB_SCHEDULE_GET_ALARM_TIME(steering_finished, ZB_ALARM_ANY_PARAM,
-				       &timeout_bi) == RET_OK) {
+	  ZB_SCHEDULE_GET_ALARM_TIME(steering_finished, ZB_ALARM_ANY_PARAM,
+				     &timeout_bi) == RET_OK) {
 		dk_set_led_on(ZIGBEE_NETWORK_LED);
 	} else {
 		dk_set_led_off(ZIGBEE_NETWORK_LED);
@@ -770,7 +770,7 @@ int main(void)
 
 	/* Zigbee */
 	ZB_AF_REGISTER_DEVICE_CTX(&coord_device);
-	dev_ctx.basic_attr.zcl_version  = ZB_ZCL_VERSION;
+	dev_ctx.basic_attr.zcl_version= ZB_ZCL_VERSION;
 	dev_ctx.basic_attr.power_source = ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE;
 	dev_ctx.identify_attr.identify_time =
 		ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE;
@@ -784,7 +784,7 @@ int main(void)
 		return err;
 	}
 	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
-			      sd, ARRAY_SIZE(sd));
+			    sd, ARRAY_SIZE(sd));
 	if (err) {
 		LOG_ERR("bt_le_adv_start failed (%d)", err);
 		return err;

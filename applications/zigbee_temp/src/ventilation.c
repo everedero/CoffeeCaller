@@ -16,15 +16,15 @@ static const struct device *pwm0_dev;
 static const struct device *strip_dev;
 
 /* Choose the buzzer freq */
-#define BUZZER_FREQ_HZ    880
-#define BUZZER_PERIOD_NS  (NSEC_PER_SEC / 880U)
+#define BUZZER_FREQ_HZ  880U
+#define BUZZER_PERIOD_NS (NSEC_PER_SEC / BUZZER_FREQ_HZ)
 /* Continuous long buzz for window opening */
 #define VENT_BUZZ_DURATION_MS 10000
 /* Beep beep buzz for window closing */
-#define VENT_BEEP_ON_MS       200
-#define VENT_BEEP_OFF_MS      200
+#define VENT_BEEP_ON_MS     200
+#define VENT_BEEP_OFF_MS    200
 
-#define STRIP_NUM_LEDS    4
+#define STRIP_NUM_LEDS  4
 
 static struct led_rgb pixels[STRIP_NUM_LEDS];
 /*
@@ -36,12 +36,12 @@ static struct led_rgb pixels[STRIP_NUM_LEDS];
 static K_MUTEX_DEFINE(led_lock);
 
 static K_MUTEX_DEFINE(v_lock);
-static int16_t v_temp[2];             /* centidegrees; slot 0=inside, 1=outside */
-static bool    v_temp_valid[2];       /* true once the slot has received at least one report */
+static int16_t v_temp[2];           /* centidegrees; slot 0=inside, 1=outside */
+static bool  v_temp_valid[2];       /* true once the slot has received at least one report */
 static int64_t v_temp_last_seen_ms[2]; /* uptime of the slot's last report */
 
 #define SAMPLE_PERIOD_S 60 /* Sample every minute */
-#define HISTORY_SIZE    20 /* 20 samples x 60 s = 20-minute rolling window */
+#define HISTORY_SIZE 20 /* 20 samples x 60 s = 20-minute rolling window */
 
 /* Sensor considered missing/stale if silent longer than this
  * LED1 blinks if a sensor error is detected
@@ -49,19 +49,19 @@ static int64_t v_temp_last_seen_ms[2]; /* uptime of the slot's last report */
 #define SENSOR_STALE_TIMEOUT_MS (10 * 60 * 1000)
 
 static int16_t diff_hist[HISTORY_SIZE];
-static int     hist_idx;
-static int     hist_count;
+static int   hist_idx;
+static int   hist_count;
 
-static bool    buzz_enabled;
+static bool  buzz_enabled;
 /* Negative initial value ensures cooldown is not active at first trigger */
 static int64_t last_buzz_uptime_ms = -3600000LL;
 
-static struct k_timer          sample_timer;
-static struct k_work           sample_work;
+static struct k_timer        sample_timer;
+static struct k_work         sample_work;
 static struct k_work_delayable buzz_pattern_work;
 
 static int64_t buzz_pattern_deadline_ms;
-static bool    buzz_pattern_on;
+static bool  buzz_pattern_on;
 
 static void buzzer_set(bool on)
 {
@@ -114,14 +114,14 @@ static void leds_update(void)
 static void led_set_buzzer(bool enabled)
 {
 	buzz_en_color = enabled ? (struct led_rgb){.r = 128, .g = 0, .b = 0}
-			     : (struct led_rgb){.r = 0, .g = 0, .b = 0};
+			   : (struct led_rgb){.r = 0, .g = 0, .b = 0};
 	leds_update();
 }
 
 static void led_set_outside_indicator(int16_t inside, int16_t outside)
 {
 	outside_color = (outside <= inside)
-				? (struct led_rgb){.r = 0, .g = 0, .b = 128}   /* blue: fresher outside */
+				? (struct led_rgb){.r = 0, .g = 0, .b = 128} /* blue: fresher outside */
 				: (struct led_rgb){.r = 160, .g = 60, .b = 0}; /* orange: hotter outside */
 	leds_update();
 }
@@ -131,11 +131,11 @@ static void sample_work_fn(struct k_work *w)
 	ARG_UNUSED(w);
 
 	int16_t inside, outside;
-	bool    both_valid;
+	bool both_valid;
 
 	k_mutex_lock(&v_lock, K_FOREVER);
-	inside     = v_temp[0];
-	outside    = v_temp[1];
+	inside   = v_temp[0];
+	outside  = v_temp[1];
 	both_valid = v_temp_valid[0] && v_temp_valid[1];
 	k_mutex_unlock(&v_lock);
 
@@ -195,7 +195,7 @@ static void sample_timer_fn(struct k_timer *t)
 
 void ventilation_init(void)
 {
-	pwm0_dev  = DEVICE_DT_GET(DT_NODELABEL(pwm0));
+	pwm0_dev= DEVICE_DT_GET(DT_NODELABEL(pwm0));
 	strip_dev = DEVICE_DT_GET(DT_ALIAS(led_strip));
 
 	if (!device_is_ready(pwm0_dev)) {
@@ -209,7 +209,7 @@ void ventilation_init(void)
 	k_work_init_delayable(&buzz_pattern_work, buzz_pattern_work_fn);
 	k_timer_init(&sample_timer, sample_timer_fn, NULL);
 	k_timer_start(&sample_timer,
-		      K_SECONDS(SAMPLE_PERIOD_S), K_SECONDS(SAMPLE_PERIOD_S));
+		    K_SECONDS(SAMPLE_PERIOD_S), K_SECONDS(SAMPLE_PERIOD_S));
 
 	led_set_buzzer(false);
 
@@ -222,13 +222,13 @@ void ventilation_update_temp(int slot, int16_t temp_centideg)
 		return;
 	}
 	k_mutex_lock(&v_lock, K_FOREVER);
-	v_temp[slot]              = temp_centideg;
-	v_temp_valid[slot]        = true;
+	v_temp[slot]            = temp_centideg;
+	v_temp_valid[slot]      = true;
 	v_temp_last_seen_ms[slot] = k_uptime_get();
 
-	bool    both_valid = v_temp_valid[0] && v_temp_valid[1];
-	int16_t inside     = v_temp[0];
-	int16_t outside    = v_temp[1];
+	bool  both_valid = v_temp_valid[0] && v_temp_valid[1];
+	int16_t inside   = v_temp[0];
+	int16_t outside  = v_temp[1];
 	k_mutex_unlock(&v_lock);
 
 	if (both_valid) {
@@ -238,13 +238,13 @@ void ventilation_update_temp(int slot, int16_t temp_centideg)
 
 bool ventilation_sensor_missing(void)
 {
-	bool    missing;
+	bool  missing;
 	int64_t now = k_uptime_get();
 
 	k_mutex_lock(&v_lock, K_FOREVER);
 	missing = !v_temp_valid[0] || !v_temp_valid[1] ||
-		  (now - v_temp_last_seen_ms[0]) > SENSOR_STALE_TIMEOUT_MS ||
-		  (now - v_temp_last_seen_ms[1]) > SENSOR_STALE_TIMEOUT_MS;
+		(now - v_temp_last_seen_ms[0]) > SENSOR_STALE_TIMEOUT_MS ||
+		(now - v_temp_last_seen_ms[1]) > SENSOR_STALE_TIMEOUT_MS;
 	k_mutex_unlock(&v_lock);
 
 	return missing;
