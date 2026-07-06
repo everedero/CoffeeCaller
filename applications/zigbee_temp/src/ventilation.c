@@ -1,11 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Ventilation alarm: beeps in short pulses for 10 s when inside temperature is
- * warmer than outside by more than 2°C (20-minute rolling average), inside >
- * 25°C, at most once/hour. Also drives the outside-vs-inside color indicator
- * (RGB pixel 1) and reports sensor staleness for the LED1 health blink.
- * Slot 1 = outside sensor, slot 0 = inside sensor.
+ * Temperature sensor and ventilation alarm
  */
 
 #include "ventilation.h"
@@ -16,55 +12,53 @@
 
 LOG_MODULE_REGISTER(ventilation, LOG_LEVEL_INF);
 
-/* --- Hardware --------------------------------------------------------------- */
-
 static const struct device *pwm0_dev;
 static const struct device *strip_dev;
 
-/* PWM0 channel 0 drives P1.10 (buzzer).  880 Hz ≈ a sharp attention tone. */
+/* Choose the buzzer freq */
+#define BUZZER_FREQ_HZ    880
 #define BUZZER_PERIOD_NS  (NSEC_PER_SEC / 880U)
+/* Continuous long buzz for window opening */
+#define VENT_BUZZ_DURATION_MS 10000
+/* Beep beep buzz for window closing */
+#define VENT_BEEP_ON_MS       200
+#define VENT_BEEP_OFF_MS      200
+
 #define STRIP_NUM_LEDS    4
 
 static struct led_rgb pixels[STRIP_NUM_LEDS];
 /*
- * Guards pixels[] and led_strip_update_rgb(): led_set_vent() runs on the
- * system workqueue (button press) while led_set_outside_indicator() runs on
- * the Zigbee thread (ZCL report) — without this, two concurrent bit-banged
+ * Creating a mutex to guard pixels[] and led_strip_update_rgb().
+ * Two concurrent thread use the GPIO transmission: system workqueue for button
+ * press, and Zigbee thread for led_set_outside_indicator.
  * GPIO transmissions on the same wire corrupt each other's pixel data.
  */
 static K_MUTEX_DEFINE(led_lock);
-
-/* --- State ------------------------------------------------------------------ */
 
 static K_MUTEX_DEFINE(v_lock);
 static int16_t v_temp[2];             /* centidegrees; slot 0=inside, 1=outside */
 static bool    v_temp_valid[2];       /* true once the slot has received at least one report */
 static int64_t v_temp_last_seen_ms[2]; /* uptime of the slot's last report */
 
-#define SAMPLE_PERIOD_S 60
-#define HISTORY_SIZE    20 /* 20 samples × 60 s = 20-minute rolling window */
+#define SAMPLE_PERIOD_S 60 /* Sample every minute */
+#define HISTORY_SIZE    20 /* 20 samples x 60 s = 20-minute rolling window */
 
-/* Sensor considered missing/stale if silent longer than this (> 2x the 300s
- * max ZCL report interval configured in main.c). Drives the LED1 health blink. */
+/* Sensor considered missing/stale if silent longer than this
+ * LED1 blinks if a sensor error is detected
+ */
 #define SENSOR_STALE_TIMEOUT_MS (10 * 60 * 1000)
 
-static int16_t diff_hist[HISTORY_SIZE]; /* inside-outside per sample */
+static int16_t diff_hist[HISTORY_SIZE];
 static int     hist_idx;
 static int     hist_count;
 
-static bool    vent_enabled;
+static bool    buzz_enabled;
 /* Negative initial value ensures cooldown is not active at first trigger */
 static int64_t last_buzz_uptime_ms = -3600000LL;
 
 static struct k_timer          sample_timer;
 static struct k_work           sample_work;
 static struct k_work_delayable buzz_pattern_work;
-
-/* --- Buzzer ----------------------------------------------------------------- */
-
-#define VENT_BUZZ_DURATION_MS 10000
-#define VENT_BEEP_ON_MS       200
-#define VENT_BEEP_OFF_MS      200
 
 static int64_t buzz_pattern_deadline_ms;
 static bool    buzz_pattern_on;
@@ -99,36 +93,29 @@ static void buzzer_start_pattern(uint32_t duration_ms)
 	k_work_schedule(&buzz_pattern_work, K_MSEC(VENT_BEEP_ON_MS));
 }
 
-/* --- LED -------------------------------------------------------------------- */
-
 /*
- * Authoritative colors for pixels 0 and 1. These, not pixels[] itself, are
- * the source of truth: the ws2812-gpio driver's update_rgb() converts to
- * on-wire format IN PLACE inside the buffer it's given (it repacks r/g/b
- * bytes across pixel boundaries using the CONFIG_LED_STRIP_RGB_SCRATCH pad
- * byte), so pixels[] no longer holds valid RGB values for any pixel that
- * wasn't just freshly (re)assigned once update_rgb() returns. Every flush
- * therefore rebuilds pixels[] from scratch from these two variables so one
- * indicator's update never leaks stale/corrupted bytes into the other's
- * pixel slot.
+ * LED strip first LED is only on when the buzzer is active.
+ * LED second LED is active as soon as both sensors are detected, and
+ * tells if temperature is hotter and fresher outside.
+ * We store state to update all the LEDs from the LED strip at the same time.
  */
-static struct led_rgb vent_color;
+static struct led_rgb buzz_en_color;
 static struct led_rgb outside_color;
 
-static void leds_flush(void)
+static void leds_update(void)
 {
 	k_mutex_lock(&led_lock, K_FOREVER);
-	pixels[0] = vent_color;
+	pixels[0] = buzz_en_color;
 	pixels[1] = outside_color;
 	led_strip_update_rgb(strip_dev, pixels, STRIP_NUM_LEDS);
 	k_mutex_unlock(&led_lock);
 }
 
-static void led_set_vent(bool enabled)
+static void led_set_buzzer(bool enabled)
 {
-	vent_color = enabled ? (struct led_rgb){.r = 128, .g = 0, .b = 0}
+	buzz_en_color = enabled ? (struct led_rgb){.r = 128, .g = 0, .b = 0}
 			     : (struct led_rgb){.r = 0, .g = 0, .b = 0};
-	leds_flush();
+	leds_update();
 }
 
 static void led_set_outside_indicator(int16_t inside, int16_t outside)
@@ -136,10 +123,8 @@ static void led_set_outside_indicator(int16_t inside, int16_t outside)
 	outside_color = (outside <= inside)
 				? (struct led_rgb){.r = 0, .g = 0, .b = 128}   /* blue: fresher outside */
 				: (struct led_rgb){.r = 160, .g = 60, .b = 0}; /* orange: hotter outside */
-	leds_flush();
+	leds_update();
 }
-
-/* --- Sample work handler ---------------------------------------------------- */
 
 static void sample_work_fn(struct k_work *w)
 {
@@ -177,7 +162,7 @@ static void sample_work_fn(struct k_work *w)
 	LOG_INF("vent_sample: inside=%d outside=%d diff=%d avg=%d (n=%d/%d)",
 		inside, outside, diff, avg_diff, hist_count, HISTORY_SIZE);
 
-	if (!vent_enabled) {
+	if (!buzz_enabled) {
 		return;
 	}
 	if (hist_count < HISTORY_SIZE) {
@@ -206,7 +191,7 @@ static void sample_timer_fn(struct k_timer *t)
 	k_work_submit(&sample_work);
 }
 
-/* --- Public API ------------------------------------------------------------- */
+/* Public API */
 
 void ventilation_init(void)
 {
@@ -226,7 +211,7 @@ void ventilation_init(void)
 	k_timer_start(&sample_timer,
 		      K_SECONDS(SAMPLE_PERIOD_S), K_SECONDS(SAMPLE_PERIOD_S));
 
-	led_set_vent(false);
+	led_set_buzzer(false);
 
 	LOG_INF("Ventilation alarm initialized (disabled; %d-min warmup)", HISTORY_SIZE);
 }
@@ -265,16 +250,16 @@ bool ventilation_sensor_missing(void)
 	return missing;
 }
 
-void ventilation_toggle(void)
+void vent_buzzer_toggle(void)
 {
-	vent_enabled = !vent_enabled;
-	led_set_vent(vent_enabled);
-	LOG_INF("Ventilation alarm %s", vent_enabled ? "ENABLED" : "DISABLED");
+	buzz_enabled = !buzz_enabled;
+	led_set_buzzer(buzz_enabled);
+	LOG_INF("Ventilation alarm %s", buzz_enabled ? "ENABLED" : "DISABLED");
 }
 
-bool ventilation_is_enabled(void)
+bool vent_buzzer_is_enabled(void)
 {
-	return vent_enabled;
+	return buzz_enabled;
 }
 
 void ventilation_buzz_test(void)

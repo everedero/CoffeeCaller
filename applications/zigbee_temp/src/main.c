@@ -1,6 +1,4 @@
 /*
- * SPDX-FileCopyrightText: 2025 Alicipy <dev@stefankraus.org>
- *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Zigbee coordinator + BLE ESS bridge for nRF52840 DK.
@@ -35,7 +33,7 @@
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
-/* --- LEDs / buttons (nRF52840 DK) ---------------------------------------- */
+/* LEDs / buttons (nRF52840 DK) */
 
 #define RUN_STATUS_LED          DK_LED1
 #define ZIGBEE_NETWORK_LED      DK_LED3
@@ -45,7 +43,7 @@ LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 #define VENT_TEST_BUTTON        DK_BTN3_MSK
 #define FACTORY_RESET_BUTTON    DK_BTN4_MSK
 
-/* --- Zigbee endpoint ------------------------------------------------------- */
+/* Zigbee endpoint */
 
 #define COORDINATOR_ENDPOINT    1
 
@@ -97,7 +95,7 @@ zb_zcl_cluster_desc_t coord_clusters[] = {
 };
 
 /* ZB_DECLARE_SIMPLE_DESC / ZB_AF_SIMPLE_DESC_TYPE use ## token-pasting, so
- * literal counts must be used here — macro constants are not expanded by ##. */
+ * literal counts must be used here, macro constants are not expanded by ##. */
 ZB_DECLARE_SIMPLE_DESC(2, 2);
 
 ZB_AF_SIMPLE_DESC_TYPE(2, 2)
@@ -127,13 +125,13 @@ ZB_AF_DECLARE_ENDPOINT_DESC(
 
 ZBOSS_DECLARE_DEVICE_CTX_1_EP(coord_device, coord_ep);
 
-/* --- BLE ESS shared state -------------------------------------------------- */
+/* BLE ESS shared state */
 
 /*
- * MAX_ESS_SENSORS characteristic pairs in the ESS service — one per Zigbee
- * sensor slot.  Slot s → temperature at attrs[ESS_TEMP_ATTR_IDX(s)],
+ * MAX_ESS_SENSORS characteristic pairs in the ESS service, one per Zigbee
+ * sensor slot. Slot s -> temperature at attrs[ESS_TEMP_ATTR_IDX(s)],
  * humidity at attrs[ESS_HUM_ATTR_IDX(s)].
- * Slots ≥ MAX_ESS_SENSORS are clamped to MAX_ESS_SENSORS-1 (last pair).
+ * Slots >= MAX_ESS_SENSORS are clamped to MAX_ESS_SENSORS-1 (last pair).
  */
 #define MAX_ESS_SENSORS 2
 #define ESS_TEMP_ATTR_IDX(s)  (2 + (s) * 8)
@@ -145,13 +143,13 @@ ZBOSS_DECLARE_DEVICE_CTX_1_EP(coord_device, coord_ep);
  * but we use a mutex to also protect the notify flags.
  */
 static K_MUTEX_DEFINE(sensor_lock);
-static int16_t  temp_raw[MAX_ESS_SENSORS];  /* 0.01 °C, sint16 per ESS spec */
+static int16_t  temp_raw[MAX_ESS_SENSORS];  /* 0.01 degC, sint16 per ESS spec */
 static uint16_t hum_raw[MAX_ESS_SENSORS];   /* 0.01 %,  uint16 per ESS spec */
 
 static bool temp_notify_enabled[MAX_ESS_SENSORS];
 static bool hum_notify_enabled[MAX_ESS_SENSORS];
 
-/* --- BLE ESS GATT service -------------------------------------------------- */
+/*  BLE ESS GATT service */
 
 /* Single read_s16/read_u16 handles all instances via attr->user_data */
 static ssize_t read_s16(struct bt_conn *conn, const struct bt_gatt_attr *attr,
@@ -261,7 +259,7 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.disconnected = ble_disconnected,
 };
 
-/* --- Sensor table & configure-reporting state ------------------------------ */
+/*  Sensor table & configure-reporting state  */
 
 #define MAX_SENSORS 4
 
@@ -273,7 +271,7 @@ typedef struct {
 
 static sensor_entry_t sensors[MAX_SENSORS];
 static zb_uint16_t    cr_pending_addr;
-static zb_int16_t     temp_rep_change = 50;   /* 0.5 °C in 0.01 °C units */
+static zb_int16_t     temp_rep_change = 50;   /* 0.5 degC in 0.01 degC units */
 static zb_uint16_t    hum_rep_change  = 100;  /* 1.0 % in 0.01 % units */
 
 /*
@@ -332,7 +330,7 @@ static int sensor_alloc(zb_uint16_t addr, const zb_uint8_t *ieee)
 }
 
 /* Forward declaration needed by zcl_ep_handler and retry_cr_alarm */
-/* --- IEEE address cache (populated from DEVICE_UPDATE) --------------------- */
+/* IEEE address cache (populated from DEVICE_UPDATE) */
 
 #define ADDR_CACHE_SIZE 8
 
@@ -369,7 +367,7 @@ static const zb_uint8_t *addr_cache_lookup(zb_uint16_t short_addr)
 
 static void retry_cr_alarm(zb_uint8_t param);
 
-/* --- ZCL endpoint handler -------------------------------------------------- */
+/* ZCL endpoint handler */
 
 /*
  * Called by ZBOSS for every ZCL frame arriving on COORDINATOR_ENDPOINT.
@@ -396,7 +394,7 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 		(void)ZB_SCHEDULE_APP_ALARM_CANCEL(retry_cr_alarm, (zb_uint8_t)slot);
 	} else {
 		/* Already reporting without rejoining (e.g. after coordinator
-		 * reflash) — register it so the table stays consistent */
+		 * reflash).  Register it so the table stays consistent */
 		slot = sensor_alloc(src, addr_cache_lookup(src));
 		if (slot >= 0) {
 			LOG_INF("Registered existing sensor 0x%04x from ZCL report", src);
@@ -448,7 +446,7 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 	return ZB_FALSE;
 }
 
-/* --- Global APS data indication (diagnostic: catches ALL incoming APS frames) */
+/* Global APS data indication (diagnostic: catches ALL incoming APS frames) */
 
 static zb_uint8_t aps_data_indication(zb_bufid_t bufid)
 {
@@ -463,7 +461,7 @@ static zb_uint8_t aps_data_indication(zb_bufid_t bufid)
 	return ZB_FALSE; /* not consumed; let normal dispatch continue */
 }
 
-/* --- Zigbee signal handler ------------------------------------------------- */
+/* Zigbee signal handler */
 
 static void steering_finished(zb_uint8_t param)
 {
@@ -472,7 +470,7 @@ static void steering_finished(zb_uint8_t param)
 	dk_set_led_off(ZIGBEE_NETWORK_LED);
 }
 
-/* --- Configure reporting --------------------------------------------------- */
+/*  Configure reporting  */
 
 /* configure_temp_reporting is called via zb_buf_get_out_delayed from retry_cr_alarm */
 static void configure_temp_reporting(zb_bufid_t bufid);
@@ -511,7 +509,7 @@ static void configure_hum_reporting(zb_bufid_t bufid)
 	idx = sensor_find(cr_pending_addr);
 	LOG_INF("Configure reporting sent: humidity 0x%04x (retry=%d)",
 		cr_pending_addr, idx >= 0 ? sensors[idx].cr_retry : 0);
-	/* Retry every 60 s — sleepy device may not be awake yet */
+	/* Retry every 60 s. Sleepy device may not be awake yet */
 	if (idx >= 0 && sensors[idx].cr_retry < 10) {
 		ZB_ERROR_CHECK(ZB_SCHEDULE_APP_ALARM(retry_cr_alarm, (zb_uint8_t)idx,
 						     ZB_TIME_ONE_SECOND * 60));
@@ -572,7 +570,7 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 	zb_bool_t comm_status;
 
 	if ((has_changed & VENT_BUTTON) && (button_state & VENT_BUTTON)) {
-		ventilation_toggle();
+		vent_buzzer_toggle();
 	}
 
 	if ((has_changed & VENT_TEST_BUTTON) && (button_state & VENT_TEST_BUTTON)) {
@@ -751,8 +749,6 @@ void zboss_signal_handler(zb_bufid_t bufid)
 	}
 }
 
-/* --- main ------------------------------------------------------------------ */
-
 int main(void)
 {
 	int err;
@@ -798,7 +794,7 @@ int main(void)
 	/* Register global APS data indication to log all incoming frames */
 	zb_af_set_data_indication(aps_data_indication);
 
-	/* Start Zigbee — opens network automatically on first boot */
+	/* Start Zigbee: opens network automatically on first boot */
 	zigbee_enable();
 	LOG_INF("Zigbee started");
 
