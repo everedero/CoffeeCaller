@@ -41,11 +41,11 @@ static bool  v_temp_valid[2];       /* true once the slot has received at least 
 static int64_t v_temp_last_seen_ms[2]; /* uptime of the slot's last report */
 
 #define SAMPLE_PERIOD_S 60           /* Sample every minute */
-#define HISTORY_SIZE 20             /* 20 samples x 60 s = 20-minute rolling window */
+#define HISTORY_SIZE 5              /* 20 samples x 60 s = 20-minute rolling window */
 #define SNOOZE_TIME 3600000LL       /* Re-buzz after SNOOZE_TIME, in ms */
 
 #define INSIDE_TEMP_THRESHOLD 2000   /* Minimum temperature at which to run alarm (deg x 100) */
-#define MIN_TEMP_DIFF         200    /* Minimum temperature difference (deg x 100) */
+#define MIN_TEMP_DIFF         20    /* Minimum temperature difference (deg x 100) */
 
 /* Sensor considered missing/stale if silent longer than this
  * LED1 blinks if a sensor error is detected
