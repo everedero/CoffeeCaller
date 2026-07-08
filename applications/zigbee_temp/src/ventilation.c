@@ -56,7 +56,7 @@ static int16_t diff_hist[HISTORY_SIZE];
 static int   hist_idx;
 static int   hist_count;
 
-static bool  buzz_enabled;
+static bool  buzz_enabled = true;   /* Armed at boot; button 1 toggles to disarm */
 /* Negative initial value ensures cooldown is not active at first trigger */
 static int64_t last_buzz_uptime_ms = -3600000LL;
 
@@ -174,9 +174,13 @@ static void sample_work_fn(struct k_work *w)
 		return;
 	}
 	if (inside <= INSIDE_TEMP_THRESHOLD) {
+		LOG_INF("vent: no buzz - inside %d <= threshold %d",
+			inside, INSIDE_TEMP_THRESHOLD);
 		return; /* inside not warm enough */
 	}
 	if (avg_diff <= MIN_TEMP_DIFF) {
+		LOG_INF("vent: no buzz - avg_diff %d <= min %d",
+			avg_diff, MIN_TEMP_DIFF);
 		return; /* not enough gradient */
 	}
 	if (k_uptime_get() - last_buzz_uptime_ms < SNOOZE_TIME) {
@@ -215,9 +219,10 @@ void ventilation_init(void)
 	k_timer_start(&sample_timer,
 		    K_SECONDS(SAMPLE_PERIOD_S), K_SECONDS(SAMPLE_PERIOD_S));
 
-	led_set_buzzer(false);
+	led_set_buzzer(buzz_enabled);
 
-	LOG_INF("Ventilation alarm initialized (disabled; %d-min warmup)", HISTORY_SIZE);
+	LOG_INF("Ventilation alarm initialized (%s; %d-min warmup)",
+		buzz_enabled ? "armed" : "disarmed", HISTORY_SIZE);
 }
 
 void ventilation_update_temp(int slot, int16_t temp_centideg)

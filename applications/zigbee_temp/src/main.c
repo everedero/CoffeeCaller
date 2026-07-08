@@ -395,7 +395,24 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 	} else {
 		/* Already reporting without rejoining (e.g. after coordinator
 		 * reflash).Register it so the table stays consistent */
-		slot = sensor_alloc(src, addr_cache_lookup(src));
+		const zb_uint8_t *ieee = addr_cache_lookup(src);
+		zb_ieee_addr_t ieee_buf;
+
+		/* addr_cache is only filled on join announce and is not
+		 * persisted, so after a warm reboot it is empty. Fall back to
+		 * ZBOSS's address table (NVRAM-backed for joined devices) so the
+		 * inside/outside pinning survives reboots instead of collapsing
+		 * to nondeterministic join order. */
+		if (ieee == NULL &&
+		    zb_address_ieee_by_short(src, ieee_buf) == RET_OK) {
+			ieee = ieee_buf;
+			addr_cache_update(src, ieee_buf);
+			LOG_INF("Resolved MAC for 0x%04x: "
+				"%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x", src,
+				ieee_buf[7], ieee_buf[6], ieee_buf[5], ieee_buf[4],
+				ieee_buf[3], ieee_buf[2], ieee_buf[1], ieee_buf[0]);
+		}
+		slot = sensor_alloc(src, ieee);
 		if (slot >= 0) {
 			LOG_INF("Registered existing sensor 0x%04x from ZCL report", src);
 		}
