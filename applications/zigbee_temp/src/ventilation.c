@@ -18,9 +18,8 @@ static const struct device *strip_dev;
 /* Choose the buzzer freq */
 #define BUZZER_FREQ_HZ  880U
 #define BUZZER_PERIOD_NS (NSEC_PER_SEC / BUZZER_FREQ_HZ)
-/* Continuous long buzz for window opening */
+/* Total duration of one alarm/test buzz, played as the beep-beep pattern below */
 #define VENT_BUZZ_DURATION_MS 10000
-/* Beep beep buzz for window closing */
 #define VENT_BEEP_ON_MS     200
 #define VENT_BEEP_OFF_MS    200
 
@@ -36,12 +35,12 @@ static struct led_rgb pixels[STRIP_NUM_LEDS];
 static K_MUTEX_DEFINE(led_lock);
 
 static K_MUTEX_DEFINE(v_lock);
-static int16_t v_temp[2];           /* centidegrees; slot 0=inside, 1=outside */
-static bool  v_temp_valid[2];       /* true once the slot has received at least one report */
-static int64_t v_temp_last_seen_ms[2]; /* uptime of the slot's last report */
+static int16_t v_temp[VENT_ROLE_COUNT];           /* centidegrees, indexed by enum vent_role */
+static bool  v_temp_valid[VENT_ROLE_COUNT];       /* true once the slot has received at least one report */
+static int64_t v_temp_last_seen_ms[VENT_ROLE_COUNT]; /* uptime of the slot's last report */
 
 #define SAMPLE_PERIOD_S 60           /* Sample every minute */
-#define HISTORY_SIZE 5              /* 20 samples x 60 s = 20-minute rolling window */
+#define HISTORY_SIZE 5              /* 5 samples x 60 s = 5-minute rolling window */
 #define SNOOZE_TIME 3600000LL       /* Re-buzz after SNOOZE_TIME, in ms */
 
 #define INSIDE_TEMP_THRESHOLD 2000   /* Minimum temperature at which to run alarm (deg x 100) */
@@ -138,9 +137,9 @@ static void sample_work_fn(struct k_work *w)
 	bool both_valid;
 
 	k_mutex_lock(&v_lock, K_FOREVER);
-	inside   = v_temp[0];
-	outside  = v_temp[1];
-	both_valid = v_temp_valid[0] && v_temp_valid[1];
+	inside   = v_temp[VENT_ROLE_INSIDE];
+	outside  = v_temp[VENT_ROLE_OUTSIDE];
+	both_valid = v_temp_valid[VENT_ROLE_INSIDE] && v_temp_valid[VENT_ROLE_OUTSIDE];
 	k_mutex_unlock(&v_lock);
 
 	if (!both_valid) {
@@ -227,7 +226,7 @@ void ventilation_init(void)
 
 void ventilation_update_temp(int slot, int16_t temp_centideg)
 {
-	if (slot < 0 || slot > 1) {
+	if (slot < 0 || slot >= VENT_ROLE_COUNT) {
 		return;
 	}
 	k_mutex_lock(&v_lock, K_FOREVER);
@@ -235,9 +234,9 @@ void ventilation_update_temp(int slot, int16_t temp_centideg)
 	v_temp_valid[slot]      = true;
 	v_temp_last_seen_ms[slot] = k_uptime_get();
 
-	bool  both_valid = v_temp_valid[0] && v_temp_valid[1];
-	int16_t inside   = v_temp[0];
-	int16_t outside  = v_temp[1];
+	bool  both_valid = v_temp_valid[VENT_ROLE_INSIDE] && v_temp_valid[VENT_ROLE_OUTSIDE];
+	int16_t inside   = v_temp[VENT_ROLE_INSIDE];
+	int16_t outside  = v_temp[VENT_ROLE_OUTSIDE];
 	k_mutex_unlock(&v_lock);
 
 	if (both_valid) {
@@ -251,9 +250,9 @@ bool ventilation_sensor_missing(void)
 	int64_t now = k_uptime_get();
 
 	k_mutex_lock(&v_lock, K_FOREVER);
-	missing = !v_temp_valid[0] || !v_temp_valid[1] ||
-		(now - v_temp_last_seen_ms[0]) > SENSOR_STALE_TIMEOUT_MS ||
-		(now - v_temp_last_seen_ms[1]) > SENSOR_STALE_TIMEOUT_MS;
+	missing = !v_temp_valid[VENT_ROLE_INSIDE] || !v_temp_valid[VENT_ROLE_OUTSIDE] ||
+		(now - v_temp_last_seen_ms[VENT_ROLE_INSIDE]) > SENSOR_STALE_TIMEOUT_MS ||
+		(now - v_temp_last_seen_ms[VENT_ROLE_OUTSIDE]) > SENSOR_STALE_TIMEOUT_MS;
 	k_mutex_unlock(&v_lock);
 
 	return missing;

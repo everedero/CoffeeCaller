@@ -226,14 +226,14 @@ Press SW0 to enable. The first RGB LED turns red.
 The board monitors the difference between indoor (Sensor 1) and outdoor (Sensor 2)
 temperatures. Every 60 seconds a sample is taken; the alarm triggers when:
 
-- The 20-minute rolling average of (inside - outside) > 2 °C, and
-- Inside temperature > 25 °C, and
+- The 5-minute rolling average of (inside - outside) > 0.2 °C, and
+- Inside temperature > 20 °C, and
 - The alarm has not triggered in the last hour.
 
 When triggered, the buzzer beeps in short pulses (200 ms on/off) for 10 seconds. Press SW0 again
 to disable.
 
-The 20-minute warm-up window means the alarm will not fire until at least 20 samples have
+The 5-minute warm-up window means the alarm will not fire until at least 5 samples have
 been collected after boot.
 
 ## Serial console

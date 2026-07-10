@@ -129,13 +129,13 @@ ZBOSS_DECLARE_DEVICE_CTX_1_EP(coord_device, coord_ep);
 
 /*
  * MAX_ESS_SENSORS characteristic pairs in the ESS service, one per Zigbee
- * sensor slot. Slot s -> temperature at attrs[ESS_TEMP_ATTR_IDX(s)],
- * humidity at attrs[ESS_HUM_ATTR_IDX(s)].
- * Slots >= MAX_ESS_SENSORS are clamped to MAX_ESS_SENSORS-1 (last pair).
+ * sensor slot (VENT_ROLE_INSIDE / VENT_ROLE_OUTSIDE). Slot s's GATT value
+ * attributes are resolved once at boot into temp_val_attr[s]/hum_val_attr[s]
+ * (see ess_resolve_attrs()) by matching attr->user_data against
+ * &temp_raw[s]/&hum_raw[s], so BLE notifications don't depend on hand-counted
+ * offsets into ess_svc.attrs[].
  */
 #define MAX_ESS_SENSORS 2
-#define ESS_TEMP_ATTR_IDX(s) (2 + (s) * 8)
-#define ESS_HUM_ATTR_IDX(s)  (6 + (s) * 8)
 
 /*
  * Written from the ZBOSS callback thread, read from BLE GATT read callbacks.
@@ -148,6 +148,10 @@ static uint16_t hum_raw[MAX_ESS_SENSORS]; /* 0.01 %,  uint16 per ESS spec */
 
 static bool temp_notify_enabled[MAX_ESS_SENSORS];
 static bool hum_notify_enabled[MAX_ESS_SENSORS];
+
+/* Resolved once at boot by ess_resolve_attrs(); see comment above MAX_ESS_SENSORS. */
+static const struct bt_gatt_attr *temp_val_attr[MAX_ESS_SENSORS];
+static const struct bt_gatt_attr *hum_val_attr[MAX_ESS_SENSORS];
 
 /*BLE ESS GATT service */
 
@@ -198,7 +202,8 @@ static void hum_ccc_changed_1(const struct bt_gatt_attr *attr, uint16_t value)
  * [9][10] Temp decl+value [11] CCC [12] CUD "Sensor 2"
  *[13][14] Hum  decl+value [15] CCC [16] CUD "Sensor 2"
  *
- *Notify targets: ESS_TEMP_ATTR_IDX(s) = 2+s*8, ESS_HUM_ATTR_IDX(s) = 6+s*8
+ * Notify targets are resolved at boot into temp_val_attr[]/hum_val_attr[]
+ * rather than indexed here (see ess_resolve_attrs()).
  */
 BT_GATT_SERVICE_DEFINE(ess_svc,
 	BT_GATT_PRIMARY_SERVICE(BT_UUID_ESS),
@@ -229,6 +234,25 @@ BT_GATT_SERVICE_DEFINE(ess_svc,
 	BT_GATT_CCC(hum_ccc_changed_1, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 	BT_GATT_CUD("Sensor 2", BT_GATT_PERM_READ),
 );
+
+/* Called once from main() after BLE init: resolves temp_val_attr[]/hum_val_attr[]
+ * by matching each GATT attribute's user_data against &temp_raw[s]/&hum_raw[s],
+ * so bt_gatt_notify() targets don't depend on hand-counted offsets into
+ * ess_svc.attrs[] (see comment above MAX_ESS_SENSORS). */
+static void ess_resolve_attrs(void)
+{
+	for (size_t i = 0; i < ess_svc.attr_count; i++) {
+		const struct bt_gatt_attr *attr = &ess_svc.attrs[i];
+
+		for (int s = 0; s < MAX_ESS_SENSORS; s++) {
+			if (attr->user_data == &temp_raw[s]) {
+				temp_val_attr[s] = attr;
+			} else if (attr->user_data == &hum_raw[s]) {
+				hum_val_attr[s] = attr;
+			}
+		}
+	}
+}
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR),
@@ -261,7 +285,7 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 
 /*Sensor table & configure-reporting state  */
 
-#define MAX_SENSORS 4
+#define MAX_SENSORS MAX_ESS_SENSORS
 
 typedef struct {
 	zb_uint16_t short_addr;
@@ -307,29 +331,18 @@ static int sensor_alloc(zb_uint16_t addr, const zb_uint8_t *ieee)
 		return slot;
 	}
 
-	int fixed_slot = is_outside_sensor(ieee) ? 1 : 0;
+	int fixed_slot = is_outside_sensor(ieee) ? VENT_ROLE_OUTSIDE : VENT_ROLE_INSIDE;
 
-	if (!sensors[fixed_slot].active) {
-		sensors[fixed_slot].short_addr = addr;
-		sensors[fixed_slot].active = true;
-		return fixed_slot;
+	if (sensors[fixed_slot].active) {
+		LOG_WRN("Slot %d already taken, ignoring sensor 0x%04x", fixed_slot, addr);
+		return -1;
 	}
 
-	if (ieee == NULL) {
-		LOG_WRN("Unknown IEEE for short=0x%04x, falling back to join-order slot", addr);
-	}
-
-	for (int i = 0; i < MAX_SENSORS; i++) {
-		if (!sensors[i].active) {
-			sensors[i].short_addr = addr;
-			sensors[i].active = true;
-			return i;
-		}
-	}
-	return -1;
+	sensors[fixed_slot].short_addr = addr;
+	sensors[fixed_slot].active = true;
+	return fixed_slot;
 }
 
-/* Forward declaration needed by zcl_ep_handler and retry_cr_alarm */
 /* IEEE address cache (populated from DEVICE_UPDATE) */
 
 #define ADDR_CACHE_SIZE 8
@@ -365,6 +378,9 @@ static const zb_uint8_t *addr_cache_lookup(zb_uint16_t short_addr)
 	return NULL;
 }
 
+/* Forward declaration: zcl_ep_handler (defined below) cancels this alarm,
+ * so it needs to see the prototype before retry_cr_alarm's own definition
+ * further down. */
 static void retry_cr_alarm(zb_uint8_t param);
 
 /* ZCL endpoint handler */
@@ -417,46 +433,55 @@ static zb_uint8_t zcl_ep_handler(zb_bufid_t bufid)
 			LOG_INF("Registered existing sensor 0x%04x from ZCL report", src);
 		}
 	}
-	int ess = (slot >= 0 && slot < MAX_ESS_SENSORS) ? slot : (MAX_ESS_SENSORS - 1);
-
 	if (hdr->cmd_id != ZB_ZCL_CMD_REPORT_ATTRIB) {
 		return ZB_FALSE;
 	}
+
+	if (slot < 0) {
+		LOG_WRN("Ignoring ZCL report from unregistered sensor 0x%04x", src);
+		return ZB_FALSE;
+	}
+	int ess = slot;
 
 	zb_zcl_report_attr_req_t *rep = NULL;
 
 	ZB_ZCL_GENERAL_GET_NEXT_REPORT_ATTR_REQ(bufid, rep);
 	while (rep != NULL) {
-		k_mutex_lock(&sensor_lock, K_FOREVER);
-
 		if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT &&
 		  rep->attr_id == ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID) {
-			temp_raw[ess] = *((int16_t *)rep->attr_value);
-			LOG_INF("Temperature: %d.%02d C (slot=%d)",
-				temp_raw[ess] / 100, abs(temp_raw[ess] % 100), ess);
-			ventilation_update_temp(ess, temp_raw[ess]);
-			if (temp_notify_enabled[ess]) {
-				int16_t t = sys_cpu_to_le16(temp_raw[ess]);
+			int16_t t;
+			bool notify;
 
-				bt_gatt_notify(NULL,
-					     &ess_svc.attrs[ESS_TEMP_ATTR_IDX(ess)],
-					     &t, sizeof(t));
+			k_mutex_lock(&sensor_lock, K_FOREVER);
+			t = temp_raw[ess] = *((int16_t *)rep->attr_value);
+			notify = temp_notify_enabled[ess];
+			k_mutex_unlock(&sensor_lock);
+
+			LOG_INF("Temperature: %d.%02d C (slot=%d)", t / 100, abs(t % 100), ess);
+			ventilation_update_temp(ess, t);
+			if (notify) {
+				int16_t le = sys_cpu_to_le16(t);
+
+				bt_gatt_notify(NULL, temp_val_attr[ess], &le, sizeof(le));
 			}
 		} else if (hdr->cluster_id == ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT &&
 			 rep->attr_id == ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID) {
-			hum_raw[ess] = *((uint16_t *)rep->attr_value);
-			LOG_INF("Humidity: %d.%02d %% (slot=%d)",
-				hum_raw[ess] / 100, hum_raw[ess] % 100, ess);
-			if (hum_notify_enabled[ess]) {
-				uint16_t h = sys_cpu_to_le16(hum_raw[ess]);
+			uint16_t h;
+			bool notify;
 
-				bt_gatt_notify(NULL,
-					     &ess_svc.attrs[ESS_HUM_ATTR_IDX(ess)],
-					     &h, sizeof(h));
+			k_mutex_lock(&sensor_lock, K_FOREVER);
+			h = hum_raw[ess] = *((uint16_t *)rep->attr_value);
+			notify = hum_notify_enabled[ess];
+			k_mutex_unlock(&sensor_lock);
+
+			LOG_INF("Humidity: %d.%02d %% (slot=%d)", h / 100, h % 100, ess);
+			if (notify) {
+				uint16_t le = sys_cpu_to_le16(h);
+
+				bt_gatt_notify(NULL, hum_val_attr[ess], &le, sizeof(le));
 			}
 		}
 
-		k_mutex_unlock(&sensor_lock);
 		ZB_ZCL_GENERAL_GET_NEXT_REPORT_ATTR_REQ(bufid, rep);
 	}
 
@@ -487,6 +512,15 @@ static void steering_finished(zb_uint8_t param)
 	dk_set_led_off(ZIGBEE_NETWORK_LED);
 }
 
+/* Schedules (or reschedules) steering_finished after the standard commissioning
+ * window. Shared by the ZB_BDB_SIGNAL_STEERING and ZB_ZDO_SIGNAL_DEVICE_ANNCE
+ * cases in zboss_signal_handler, which each wrap this differently. */
+static zb_ret_t schedule_steering_finished(void)
+{
+	return ZB_SCHEDULE_APP_ALARM(steering_finished, 0,
+				   ZB_TIME_ONE_SECOND * ZB_ZGP_DEFAULT_COMMISSIONING_WINDOW);
+}
+
 /*Configure reporting  */
 
 /* configure_temp_reporting is called via zb_buf_get_out_delayed from retry_cr_alarm */
@@ -506,23 +540,34 @@ static void retry_cr_alarm(zb_uint8_t param)
 	zb_buf_get_out_delayed(configure_temp_reporting);
 }
 
-static void configure_hum_reporting(zb_bufid_t bufid)
+/* Shared by configure_temp_reporting/configure_hum_reporting: builds and sends
+ * one ZCL "configure reporting" request for cr_pending_addr. */
+static void send_configure_reporting_req(zb_bufid_t bufid, zb_uint16_t cluster_id,
+					  zb_uint16_t attr_id, zb_uint8_t attr_type,
+					  zb_uint8_t *change_ptr)
 {
 	zb_uint8_t *ptr;
+
+	ZB_ZCL_GENERAL_INIT_CONFIGURE_REPORTING_SRV_REQ(bufid, ptr,
+		ZB_ZCL_DISABLE_DEFAULT_RESPONSE);
+	ZB_ZCL_GENERAL_ADD_SEND_REPORT_CONFIGURE_REPORTING_REQ(ptr,
+		attr_id, attr_type, 10, 300, change_ptr);
+	ZB_ZCL_GENERAL_SEND_CONFIGURE_REPORTING_REQ(bufid, ptr,
+		cr_pending_addr, ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
+		1, COORDINATOR_ENDPOINT,
+		ZB_AF_HA_PROFILE_ID, cluster_id, NULL);
+}
+
+static void configure_hum_reporting(zb_bufid_t bufid)
+{
 	int idx;
 
 	if (!bufid) {
 		return;
 	}
-	ZB_ZCL_GENERAL_INIT_CONFIGURE_REPORTING_SRV_REQ(bufid, ptr,
-		ZB_ZCL_DISABLE_DEFAULT_RESPONSE);
-	ZB_ZCL_GENERAL_ADD_SEND_REPORT_CONFIGURE_REPORTING_REQ(ptr,
+	send_configure_reporting_req(bufid, ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT,
 		ZB_ZCL_ATTR_REL_HUMIDITY_MEASUREMENT_VALUE_ID,
-		ZB_ZCL_ATTR_TYPE_U16, 10, 300, (zb_uint8_t *)&hum_rep_change);
-	ZB_ZCL_GENERAL_SEND_CONFIGURE_REPORTING_REQ(bufid, ptr,
-		cr_pending_addr, ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-		1, COORDINATOR_ENDPOINT,
-		ZB_AF_HA_PROFILE_ID, ZB_ZCL_CLUSTER_ID_REL_HUMIDITY_MEASUREMENT, NULL);
+		ZB_ZCL_ATTR_TYPE_U16, (zb_uint8_t *)&hum_rep_change);
 	idx = sensor_find(cr_pending_addr);
 	LOG_INF("Configure reporting sent: humidity 0x%04x (retry=%d)",
 		cr_pending_addr, idx >= 0 ? sensors[idx].cr_retry : 0);
@@ -535,20 +580,12 @@ static void configure_hum_reporting(zb_bufid_t bufid)
 
 static void configure_temp_reporting(zb_bufid_t bufid)
 {
-	zb_uint8_t *ptr;
-
 	if (!bufid) {
 		return;
 	}
-	ZB_ZCL_GENERAL_INIT_CONFIGURE_REPORTING_SRV_REQ(bufid, ptr,
-		ZB_ZCL_DISABLE_DEFAULT_RESPONSE);
-	ZB_ZCL_GENERAL_ADD_SEND_REPORT_CONFIGURE_REPORTING_REQ(ptr,
+	send_configure_reporting_req(bufid, ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
 		ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
-		ZB_ZCL_ATTR_TYPE_S16, 10, 300, (zb_uint8_t *)&temp_rep_change);
-	ZB_ZCL_GENERAL_SEND_CONFIGURE_REPORTING_REQ(bufid, ptr,
-		cr_pending_addr, ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
-		1, COORDINATOR_ENDPOINT,
-		ZB_AF_HA_PROFILE_ID, ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT, NULL);
+		ZB_ZCL_ATTR_TYPE_S16, (zb_uint8_t *)&temp_rep_change);
 	LOG_INF("Configure reporting sent: temperature 0x%04x", cr_pending_addr);
 	zb_buf_get_out_delayed(configure_hum_reporting);
 }
@@ -642,10 +679,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 		if (status == RET_OK) {
 			LOG_INF("Network steering started (180 s open)");
 			zb_bdb_set_legacy_device_support(1);
-			err = ZB_SCHEDULE_APP_ALARM(
-				steering_finished, 0,
-				ZB_TIME_ONE_SECOND *
-				ZB_ZGP_DEFAULT_COMMISSIONING_WINDOW);
+			err = schedule_steering_finished();
 			ZB_ERROR_CHECK(err);
 		}
 		break;
@@ -660,10 +694,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 		err = ZB_SCHEDULE_APP_ALARM_CANCEL(steering_finished,
 						 ZB_ALARM_ANY_PARAM);
 		if (err == RET_OK) {
-			err = ZB_SCHEDULE_APP_ALARM(
-				steering_finished, 0,
-				ZB_TIME_ONE_SECOND *
-				ZB_ZGP_DEFAULT_COMMISSIONING_WINDOW);
+			err = schedule_steering_finished();
 			ZB_ERROR_CHECK(err);
 		}
 	} break;
@@ -807,6 +838,7 @@ int main(void)
 		return err;
 	}
 	LOG_INF("BLE advertising started (ESS)");
+	ess_resolve_attrs();
 
 	/* Register global APS data indication to log all incoming frames */
 	zb_af_set_data_indication(aps_data_indication);

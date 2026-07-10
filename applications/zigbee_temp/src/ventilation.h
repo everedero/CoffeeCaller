@@ -6,6 +6,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Shared inside/outside slot convention, used by both main.c (Zigbee sensor
+ * slot assignment) and ventilation.c (temperature roles). */
+enum vent_role {
+	VENT_ROLE_INSIDE = 0,
+	VENT_ROLE_OUTSIDE = 1,
+	VENT_ROLE_COUNT,
+};
+
 /* Call once from main() after hardware init */
 void ventilation_init(void);
 
