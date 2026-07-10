@@ -3,8 +3,8 @@
 Zigbee coordinator and BLE gateway, built for the CoffeeCaller nRF52840 board.
 
 Ventilation alarm: it buzzes when the inside room is warmer than outside, to wake you up so you
-go open the window to cool the room down. It also warns you when it is time to close the windows
-when the sun is back.
+go open the window to cool the room down. An LED also changes color to tell you when it's time to
+close the windows again once the sun is back (this direction is indicator-only, it doesn't buzz).
 
 The buzzer can be disabled, and an LED indicator tells you if it’s fresher inside (orange LED)
 or outside (blue LED).
@@ -79,10 +79,12 @@ See [`patches/zb_nrf_crypto.patch`](patches/zb_nrf_crypto.patch) for the exact d
 
 ### Clone this repository
 
-CoffeeCaller is not part of the NCS manifest, clone it as a sibling of `ncs/v2.8.0`:
+CoffeeCaller is not part of the NCS manifest, clone it as a sibling of `ncs/v2.8.0`. Run this from
+the directory where you ran `west init` above (the parent of `ncs/`), regardless of which directory
+the previous step left you in:
 
 ```bash
-git clone <your-fork-url> CoffeeCaller
+git clone <your-fork-url> ncs/CoffeeCaller
 ```
 
 This is the resulting tree:
@@ -217,7 +219,8 @@ Values update whenever the sensor reports (every 10–300 s or on >=0.5 °C / >=
 |--------|---------|
 | SW0 | Toggle ventilation alarm on/off |
 | SW1 | Reopen Zigbee network for pairing (3-minute window) |
-| SW4 (hold) | Factory reset the coordinator |
+| SW2 | Fire the buzzer for 1 s (hardware test, bypasses all alarm logic) |
+| SW3 (hold) | Factory reset the coordinator |
 
 ### Ventilation alarm
 
